@@ -27,10 +27,16 @@ def run_ai_triage(issue):
     """
     try:
         url = f"{settings.AI_SERVICE_URL}/triage"
+        # Pass existing issues to enable cross-district/district similarity-based duplicate detection
+        existing_issues = list(
+            Issue.objects.exclude(id=issue.id)
+            .values('id', 'title', 'description', 'district')[:50]
+        )
         payload = {
             "title": issue.title,
             "description": issue.description,
             "district": issue.district,
+            "existing_issues": existing_issues,
         }
         res = requests.post(url, json=payload, timeout=3)
         if res.status_code == 200:
@@ -38,13 +44,16 @@ def run_ai_triage(issue):
             issue.category = data.get('predicted_category', issue.category)
             issue.ai_confidence = data.get('confidence', 0.85)
             issue.ai_triage_notes = data.get('summary', 'AI classification applied')
+            update_fields = ['category', 'ai_confidence', 'ai_triage_notes']
             if data.get('potential_duplicate_id'):
                 try:
                     dup = Issue.objects.get(id=data['potential_duplicate_id'])
+                    issue.duplicate_of = dup
                     issue.ai_triage_notes += f" | Flagged duplicate of #{dup.id}"
+                    update_fields.append('duplicate_of')
                 except Issue.DoesNotExist:
                     pass
-            issue.save(update_fields=['category', 'ai_confidence', 'ai_triage_notes'])
+            issue.save(update_fields=update_fields)
             return
     except Exception:
         pass
@@ -78,6 +87,12 @@ class IssueListCreateView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
     filter_backends = [filters.SearchFilter]
     search_fields = ['title', 'description', 'district', 'address']
+    throttle_scope = 'issue_create'
+
+    def get_throttles(self):
+        if self.request.method.lower() == 'post':
+            return super().get_throttles()
+        return []
 
     def get_queryset(self):
         qs = Issue.objects.select_related('submitted_by', 'adoption', 'adoption__university', 'duplicate_of').all().order_by('-created_at')

@@ -61,6 +61,35 @@ class GovAnalyticsSummaryView(APIView):
         field_deployed = ProjectLifecycle.objects.filter(outcome_status='deployed').count()
         citizen_confirmed_resolutions = Issue.objects.filter(citizen_verified_resolved=True).count()
 
+        # Institutional Track Record calculations
+        university_records = []
+        for u in University.objects.all():
+            adopted_cnt = u.adopted_issues.count()
+            resolved_cnt = Issue.objects.filter(adoption__university=u, status='resolved').count()
+            projects_cnt = Pitch.objects.filter(university=u, status__in=['selected', 'merged']).count()
+            rate = round((resolved_cnt / adopted_cnt) * 100, 1) if adopted_cnt > 0 else 100.0
+            university_records.append({
+                'id': u.id,
+                'name': u.name,
+                'district': u.district,
+                'code': u.code,
+                'adopted_issues_count': adopted_cnt,
+                'resolved_issues_count': resolved_cnt,
+                'active_projects_count': projects_cnt,
+                'resolution_rate': rate,
+            })
+
+        industry_records = []
+        for org in Organization.objects.all():
+            active_cnt = org.engagements.filter(status__in=['accepted', 'active', 'completed']).count()
+            industry_records.append({
+                'id': org.id,
+                'name': org.name,
+                'org_type': org.org_type,
+                'active_csr_initiatives': active_cnt,
+                'total_proposals': org.engagements.count(),
+            })
+
         return Response({
             'overview': {
                 'total_issues_reported': total_issues,
@@ -81,4 +110,8 @@ class GovAnalyticsSummaryView(APIView):
             },
             'categories': list(category_counts),
             'districts': list(district_counts),
+            'institutional_track_record': {
+                'universities': university_records,
+                'industry_partners': industry_records,
+            },
         })
