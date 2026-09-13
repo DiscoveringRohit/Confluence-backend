@@ -32,6 +32,7 @@ INSTALLED_APPS = [
     'apps.pitches',
     'apps.engagements',
     'apps.analytics',
+    'apps.notifications',
 ]
 
 MIDDLEWARE = [
@@ -103,6 +104,12 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.ScopedRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'issue_create': '15/hour',
+    },
 }
 
 SIMPLE_JWT = {

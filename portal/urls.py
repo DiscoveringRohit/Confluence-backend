@@ -10,6 +10,7 @@ urlpatterns = [
     path('api/pitches/', include('apps.pitches.urls')),
     path('api/engagements/', include('apps.engagements.urls')),
     path('api/analytics/', include('apps.analytics.urls')),
+    path('api/notifications/', include('apps.notifications.urls')),
 ]
 
 if settings.DEBUG:

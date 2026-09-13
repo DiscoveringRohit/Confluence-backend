@@ -2,9 +2,23 @@ from rest_framework import serializers
 from .models import User, University, Organization
 
 class UniversitySerializer(serializers.ModelSerializer):
+    total_adopted = serializers.SerializerMethodField()
+    resolution_rate = serializers.SerializerMethodField()
+
     class Meta:
         model = University
-        fields = ['id', 'name', 'code', 'district']
+        fields = ['id', 'name', 'code', 'district', 'total_adopted', 'resolution_rate']
+
+    def get_total_adopted(self, obj):
+        return obj.adopted_issues.count()
+
+    def get_resolution_rate(self, obj):
+        from apps.issues.models import Issue
+        adopted = obj.adopted_issues.count()
+        if adopted == 0:
+            return 100.0
+        resolved = Issue.objects.filter(adoption__university=obj, status='resolved').count()
+        return round((resolved / adopted) * 100, 1)
 
 
 class OrganizationSerializer(serializers.ModelSerializer):
