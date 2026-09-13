@@ -1,0 +1,84 @@
+from django.db.models import Count, Q
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import permissions
+from rest_framework.exceptions import PermissionDenied
+
+from apps.issues.models import Issue, Adoption
+from apps.pitches.models import Pitch, ProjectLifecycle
+from apps.engagements.models import IndustryEngagement
+from apps.users.models import University, Organization, User
+
+class GovAnalyticsSummaryView(APIView):
+    """
+    Returns aggregate statistics for government administrators,
+    institutional leaders, and the public dashboard summary.
+    Excludes all confidential and raw pitch details.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        if request.user.is_authenticated and request.user.role == 'student':
+            raise PermissionDenied("Students are not permitted to access Government Analytics.")
+
+        total_issues = Issue.objects.count()
+        validated_issues = Issue.objects.filter(status__in=['validated', 'adopted', 'assigned', 'resolved']).count()
+        adopted_issues = Issue.objects.filter(status__in=['adopted', 'assigned', 'resolved']).count()
+        assigned_issues = Issue.objects.filter(status__in=['assigned', 'resolved']).count()
+        resolved_issues = Issue.objects.filter(status='resolved').count()
+        escalated_issues = Issue.objects.filter(is_escalated=True).count()
+
+        # Domain/Category distribution
+        category_counts = (
+            Issue.objects
+            .values('category')
+            .annotate(count=Count('id'))
+            .order_by('-count')
+        )
+
+        # District-wise distribution
+        district_counts = (
+            Issue.objects
+            .values('district')
+            .annotate(count=Count('id'))
+            .order_by('-count')
+        )
+
+        # Institutional participation
+        total_universities = University.objects.count()
+        active_universities = University.objects.filter(adopted_issues__isnull=False).distinct().count()
+
+        # Student & pitch counts
+        total_pitches = Pitch.objects.count()
+        selected_pitches = Pitch.objects.filter(status='selected').count()
+        merged_pitches = Pitch.objects.filter(status='merged').count()
+
+        # Industry involvement
+        total_industry_partners = Organization.objects.count()
+        active_engagements = IndustryEngagement.objects.filter(status__in=['accepted', 'active', 'completed']).count()
+
+        # Field Deployment & Citizen confirmation
+        field_deployed = ProjectLifecycle.objects.filter(outcome_status='deployed').count()
+        citizen_confirmed_resolutions = Issue.objects.filter(citizen_verified_resolved=True).count()
+
+        return Response({
+            'overview': {
+                'total_issues_reported': total_issues,
+                'validated_issues': validated_issues,
+                'adopted_issues': adopted_issues,
+                'assigned_solutions': assigned_issues,
+                'resolved_issues': resolved_issues,
+                'escalated_unadopted': escalated_issues,
+                'total_universities': total_universities,
+                'active_participating_universities': active_universities,
+                'total_pitches_submitted': total_pitches,
+                'selected_solutions': selected_pitches,
+                'collaborative_merged_teams': merged_pitches,
+                'industry_partners': total_industry_partners,
+                'active_industry_partnerships': active_engagements,
+                'field_deployments': field_deployed,
+                'citizen_confirmed_resolutions': citizen_confirmed_resolutions,
+            },
+            'categories': list(category_counts),
+            'districts': list(district_counts),
+        })
