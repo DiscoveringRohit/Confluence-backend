@@ -38,7 +38,7 @@ def run_ai_triage(issue):
             "district": issue.district,
             "existing_issues": existing_issues,
         }
-        res = requests.post(url, json=payload, timeout=3)
+        res = requests.post(url, json=payload, timeout=15)
         if res.status_code == 200:
             data = res.json()
             issue.category = data.get('predicted_category', issue.category)
