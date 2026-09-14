@@ -52,3 +52,18 @@ class OrganizationListView(generics.ListCreateAPIView):
     queryset = Organization.objects.all().order_by('name')
     serializer_class = OrganizationSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+
+
+class UserListView(generics.ListAPIView):
+    serializer_class = UserProfileSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+
+    def get_queryset(self):
+        qs = User.objects.select_related('university', 'organization').all().order_by('id')
+        role = self.request.query_params.get('role')
+        if role:
+            qs = qs.filter(role=role)
+        university_id = self.request.query_params.get('university')
+        if university_id:
+            qs = qs.filter(university_id=university_id)
+        return qs

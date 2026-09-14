@@ -47,9 +47,9 @@ class ProjectLifecycleSerializer(serializers.ModelSerializer):
         user = getattr(request, 'user', None)
 
         is_team_member = user and user.is_authenticated and instance.pitch.student_team.filter(id=user.id).exists()
-        is_uni = user and user.is_authenticated and user.role in ['university_coordinator', 'faculty_mentor'] and user.university_id == instance.pitch.university_id
+        is_uni = user and user.is_authenticated and getattr(user, 'role', None) in ['university_coordinator', 'faculty_mentor'] and user.university_id == instance.pitch.university_id
         is_assigned_mentor = user and user.is_authenticated and instance.pitch.assigned_mentor_id == user.id
-        is_partner = user and user.is_authenticated and user.role == 'industry_partner' and hasattr(instance.pitch, 'issue') and instance.pitch.issue.engagements.filter(industry_org=user.organization, status__in=['active', 'accepted']).exists()
+        is_partner = user and user.is_authenticated and getattr(user, 'role', None) == 'industry_partner' and hasattr(instance.pitch, 'issue') and instance.pitch.issue.industry_engagements.filter(industry_org=user.organization, status__in=['active', 'accepted']).exists()
 
         if is_team_member or is_uni or is_assigned_mentor or is_partner:
             return data
@@ -104,8 +104,8 @@ class PitchSerializer(serializers.ModelSerializer):
 
         is_own_team = user and user.is_authenticated and instance.student_team.filter(id=user.id).exists()
         is_assigned_mentor = user and user.is_authenticated and instance.assigned_mentor_id == user.id
-        is_uni_coordinator = user and user.is_authenticated and user.role in ['university_coordinator', 'faculty_mentor'] and user.university_id == instance.university_id
-        is_invited_industry = user and user.is_authenticated and user.role == 'industry_partner' and instance.issue.engagements.filter(industry_org=user.organization, status__in=['active', 'accepted']).exists()
+        is_uni_coordinator = user and user.is_authenticated and getattr(user, 'role', None) in ['university_coordinator', 'faculty_mentor'] and user.university_id == instance.university_id
+        is_invited_industry = user and user.is_authenticated and getattr(user, 'role', None) == 'industry_partner' and instance.issue.industry_engagements.filter(industry_org=user.organization, status__in=['active', 'accepted']).exists()
 
         # 1. Confidential Package Access
         allowed_confidential = is_own_team or is_assigned_mentor or is_uni_coordinator or is_invited_industry
@@ -114,6 +114,8 @@ class PitchSerializer(serializers.ModelSerializer):
 
         # 2. Community Feedback Matrix Filtering
         cf_list = instance.community_feedback.all()
+        user_role = getattr(user, 'role', None) if user and user.is_authenticated else None
+
         if not user or not user.is_authenticated:
             # Unauthenticated: public feedback comments only, scores hidden
             data['community_feedback'] = [
@@ -127,13 +129,13 @@ class PitchSerializer(serializers.ModelSerializer):
             # Student (own team): Only if shared by mentor
             shared_cf = [f for f in cf_list if f.is_shared_with_students]
             data['community_feedback'] = CommunityFeedbackSerializer(shared_cf, many=True, context=self.context).data
-        elif user.role == 'student':
+        elif user_role == 'student':
             # Student (other teams, same issue): No feedback visible
             data['community_feedback'] = []
-        elif user.role == 'industry_partner':
+        elif user_role == 'industry_partner':
             # Industry: No
             data['community_feedback'] = []
-        elif user.role == 'gov_admin':
+        elif user_role == 'gov_admin':
             # Government: Aggregated summary only
             data['community_feedback'] = [
                 {
@@ -143,7 +145,7 @@ class PitchSerializer(serializers.ModelSerializer):
                 }
                 for f in cf_list if f.relevance_score is not None
             ]
-        elif user.role == 'citizen':
+        elif user_role == 'citizen':
             # Citizen: Fellow citizen comments visible, but relevance score visible only for own feedback
             data['community_feedback'] = [
                 {
@@ -157,7 +159,7 @@ class PitchSerializer(serializers.ModelSerializer):
             ]
 
         # 3. Project Lifecycle Filtering for Competing Student Teams
-        if user and user.role == 'student' and not is_own_team:
+        if user_role == 'student' and not is_own_team:
             data['project_lifecycle'] = None
 
         return data

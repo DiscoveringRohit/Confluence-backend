@@ -98,12 +98,19 @@ class IssueListCreateView(generics.ListCreateAPIView):
         qs = Issue.objects.select_related('submitted_by', 'adoption', 'adoption__university', 'duplicate_of').all().order_by('-created_at')
         
         status_param = self.request.query_params.get('status')
+        status_in_param = self.request.query_params.get('status__in')
         category_param = self.request.query_params.get('category')
         district_param = self.request.query_params.get('district')
         mine_param = self.request.query_params.get('mine')
 
         if status_param:
-            qs = qs.filter(status=status_param)
+            if ',' in status_param:
+                qs = qs.filter(status__in=[s.strip() for s in status_param.split(',') if s.strip()])
+            else:
+                qs = qs.filter(status=status_param)
+        elif status_in_param:
+            qs = qs.filter(status__in=[s.strip() for s in status_in_param.split(',') if s.strip()])
+
         if category_param:
             qs = qs.filter(category=category_param)
         if district_param:
