@@ -14,6 +14,7 @@ from .serializers import (
 )
 from apps.issues.models import Issue
 from apps.users.models import User
+from apps.engagements.models import IndustryEngagement
 from apps.users.permissions import (
     IsStudent,
     IsUniversityCoordinator,
@@ -211,6 +212,9 @@ class ReviewBoardActionView(APIView):
                     other_pitch.review_feedback = "Your proposal was reviewed thoroughly. Another pitch was selected for deployment, but your proposal remains archived in the university vault for future calls."
                 other_pitch.save(update_fields=['status', 'review_feedback'])
 
+            # Automatically link any active/requested industry engagements for this problem to the selected pitch
+            IndustryEngagement.objects.filter(issue=issue, pitch__isnull=True).update(pitch=pitch)
+
             return Response({
                 'message': 'Winning pitch selected! Issue transitioned to Assigned.',
                 'pitch': PitchSerializer(pitch, context={'request': request}).data,
@@ -245,6 +249,9 @@ class ReviewBoardActionView(APIView):
             issue = pitch.issue
             issue.status = Issue.Status.ASSIGNED
             issue.save(update_fields=['status'])
+
+            # Automatically link any active/requested industry engagements for this problem to the primary pitch
+            IndustryEngagement.objects.filter(issue=issue, pitch__isnull=True).update(pitch=pitch)
 
             # Auto-reject any remaining competing pitches on the same issue
             # (consistent with select_winner behavior)

@@ -10,15 +10,25 @@ class IndustryEngagementSerializer(serializers.ModelSerializer):
     created_by_details = UserProfileSerializer(source='created_by', read_only=True)
     issue_title = serializers.CharField(source='issue.title', read_only=True)
     issue_status = serializers.CharField(source='issue.status', read_only=True)
+    category = serializers.CharField(source='issue.category', read_only=True)
+    district = serializers.CharField(source='issue.district', read_only=True)
+    university_name = serializers.SerializerMethodField()
+    pitch_title = serializers.CharField(source='pitch.title', read_only=True, allow_null=True)
 
     class Meta:
         model = IndustryEngagement
         fields = [
-            'id', 'issue', 'issue_title', 'issue_status',
-            'pitch', 'industry_org', 'industry_org_details',
+            'id', 'issue', 'issue_title', 'issue_status', 'category', 'district',
+            'university_name',
+            'pitch', 'pitch_title', 'industry_org', 'industry_org_details',
             'created_by', 'created_by_details',
             'engagement_type', 'initiator', 'status',
             'proposal_notes', 'response_notes',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_by', 'status', 'initiator', 'created_at', 'updated_at']
+
+    def get_university_name(self, obj):
+        if hasattr(obj.issue, 'adoption') and obj.issue.adoption and obj.issue.adoption.university:
+            return obj.issue.adoption.university.name
+        return None

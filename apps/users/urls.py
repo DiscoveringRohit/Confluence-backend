@@ -6,9 +6,11 @@ from .views import (
     UserProfileView,
     UniversityListView,
     OrganizationListView,
+    UserListView,
 )
 
 urlpatterns = [
+    path('', UserListView.as_view(), name='user_list'),
     path('register/', RegisterView.as_view(), name='auth_register'),
     path('login/', CustomTokenObtainPairView.as_view(), name='auth_login'),
     path('token/refresh/', TokenRefreshView.as_view(), name='auth_token_refresh'),

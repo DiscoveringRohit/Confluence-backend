@@ -7,6 +7,8 @@ from .models import IndustryEngagement
 from .serializers import IndustryEngagementSerializer
 from apps.issues.models import Issue
 from apps.pitches.models import Pitch
+from apps.users.models import User
+from apps.notifications.models import Notification
 from apps.users.permissions import (
     IsIndustryPartner,
     IsUniversityCoordinator,
@@ -22,13 +24,13 @@ class IndustryEngagementListCreateView(generics.ListCreateAPIView):
 
         if user.is_authenticated:
             if user.role == 'student':
-                return IndustryEngagement.objects.none()
+                qs = qs.filter(status__in=['accepted', 'active', 'completed'])
             elif user.role == 'industry_partner':
                 if user.organization:
                     qs = qs.filter(industry_org=user.organization)
                 else:
                     qs = qs.filter(created_by=user)
-            elif user.role == 'university_coordinator':
+            elif user.role in ['university_coordinator', 'faculty_mentor']:
                 if user.university:
                     qs = qs.filter(issue__adoption__university=user.university)
 
@@ -59,14 +61,40 @@ class IndustryEngagementListCreateView(generics.ListCreateAPIView):
             raise PermissionDenied("Only industry partners or university coordinators can initiate partnerships.")
 
         # Find selected pitch if team already assigned
-        pitch = Pitch.objects.filter(issue=issue, status=Pitch.Status.SELECTED).first()
+        pitch = Pitch.objects.filter(issue=issue, status__in=[Pitch.Status.SELECTED, Pitch.Status.MERGED]).first()
 
-        serializer.save(
+        instance = serializer.save(
             created_by=user,
             initiator=initiator,
             industry_org=org,
             pitch=pitch
         )
+
+        # Notify counterpart
+        try:
+            if initiator == IndustryEngagement.Initiator.INDUSTRY:
+                if hasattr(issue, 'adoption') and issue.adoption and issue.adoption.university:
+                    coords = User.objects.filter(university=issue.adoption.university, role='university_coordinator')
+                    for coord in coords:
+                        Notification.objects.create(
+                            recipient=coord,
+                            title=f"New Industry Partnership Proposal from {org.name}",
+                            message=f"{org.name} proposed a {instance.get_engagement_type_display()} engagement for problem #{issue.id} ({issue.title[:40]}).",
+                            notification_type=Notification.NotificationType.PROJECT,
+                            link_url="/university/adopted-problems"
+                        )
+            else:
+                partners = User.objects.filter(organization=org, role='industry_partner')
+                for partner in partners:
+                    Notification.objects.create(
+                        recipient=partner,
+                        title="University Innovation Outreach",
+                        message=f"{user.university.name if user.university else 'University'} requested {instance.get_engagement_type_display()} for problem #{issue.id} ({issue.title[:40]}).",
+                        notification_type=Notification.NotificationType.PROJECT,
+                        link_url="/industry/engagements"
+                    )
+        except Exception:
+            pass
 
 
 class RespondEngagementView(APIView):
@@ -97,6 +125,27 @@ class RespondEngagementView(APIView):
         engagement.status = action_map[action]
         if response_notes:
             engagement.response_notes = response_notes
+
+        # Link selected pitch if one has been selected in the meantime
+        if not engagement.pitch:
+            selected_pitch = Pitch.objects.filter(issue=engagement.issue, status__in=[Pitch.Status.SELECTED, Pitch.Status.MERGED]).first()
+            if selected_pitch:
+                engagement.pitch = selected_pitch
+
         engagement.save()
+
+        # Send notification to initiator
+        try:
+            if engagement.created_by:
+                action_label = action.capitalize()
+                Notification.objects.create(
+                    recipient=engagement.created_by,
+                    title=f"Industry Engagement {action_label}",
+                    message=f"Engagement for Problem #{engagement.issue.id} was marked as {action_label} by {request.user.name or request.user.email}.",
+                    notification_type=Notification.NotificationType.PROJECT,
+                    link_url="/industry/engagements" if getattr(engagement.created_by, 'role', '') == 'industry_partner' else "/university/adopted-problems"
+                )
+        except Exception:
+            pass
 
         return Response(IndustryEngagementSerializer(engagement).data)
