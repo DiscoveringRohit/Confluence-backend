@@ -37,6 +37,12 @@ class IndustryEngagementTestCase(TestCase):
             status=Issue.Status.ASSIGNED,
             submitted_by=self.citizen
         )
+        self.adoption = Adoption.objects.create(
+            issue=self.issue,
+            university=self.uni,
+            coordinator=self.coord,
+            mode=Adoption.Mode.SELF_ADOPTED
+        )
 
     def test_industry_initiates_partnership(self):
         self.client.force_authenticate(user=self.industry_user)

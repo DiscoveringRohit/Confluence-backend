@@ -5,7 +5,7 @@ from rest_framework import permissions
 from rest_framework.exceptions import PermissionDenied
 
 from apps.issues.models import Issue, Adoption
-from apps.pitches.models import Pitch, ProjectLifecycle
+from apps.pitches.models import Pitch, ProjectLifecycle, Project, Certificate
 from apps.engagements.models import IndustryEngagement
 from apps.users.models import University, Organization, User
 
@@ -58,15 +58,23 @@ class GovAnalyticsSummaryView(APIView):
         active_engagements = IndustryEngagement.objects.filter(status__in=['accepted', 'active', 'completed']).count()
 
         # Field Deployment & Citizen confirmation
-        field_deployed = ProjectLifecycle.objects.filter(outcome_status='deployed').count()
+        field_deployed = Project.objects.filter(status__in=[Project.Status.DEPLOYED, Project.Status.VERIFIED]).count() or ProjectLifecycle.objects.filter(outcome_status='deployed').count()
         citizen_confirmed_resolutions = Issue.objects.filter(citizen_verified_resolved=True).count()
+
+        # Real Project Lifecycle model metrics (Issue 32, 33, 54)
+        total_projects = Project.objects.count()
+        planning_projects = Project.objects.filter(status=Project.Status.PLANNING).count()
+        prototype_projects = Project.objects.filter(status=Project.Status.PROTOTYPE).count()
+        pilot_projects = Project.objects.filter(status=Project.Status.PILOT).count()
+        verified_projects = Project.objects.filter(status=Project.Status.VERIFIED).count()
+        total_certificates = Certificate.objects.filter(is_revoked=False).count()
 
         # Institutional Track Record calculations
         university_records = []
         for u in University.objects.all():
             adopted_cnt = u.adopted_issues.count()
             resolved_cnt = Issue.objects.filter(adoption__university=u, status='resolved').count()
-            projects_cnt = Pitch.objects.filter(university=u, status__in=['selected', 'merged']).count()
+            projects_cnt = u.projects.count() if hasattr(u, 'projects') else Pitch.objects.filter(university=u, status__in=['selected', 'merged']).count()
             rate = round((resolved_cnt / adopted_cnt) * 100, 1) if adopted_cnt > 0 else 100.0
             university_records.append({
                 'id': u.id,
@@ -103,10 +111,17 @@ class GovAnalyticsSummaryView(APIView):
                 'total_pitches_submitted': total_pitches,
                 'selected_solutions': selected_pitches,
                 'collaborative_merged_teams': merged_pitches,
+                'total_projects': total_projects,
+                'projects_planning': planning_projects,
+                'projects_prototype': prototype_projects,
+                'projects_pilot': pilot_projects,
+                'projects_verified': verified_projects,
+                'verified_outcome_certificates': total_certificates,
                 'industry_partners': total_industry_partners,
                 'active_industry_partnerships': active_engagements,
                 'field_deployments': field_deployed,
                 'citizen_confirmed_resolutions': citizen_confirmed_resolutions,
+                'is_real_time_aggregate': True,
             },
             'categories': list(category_counts),
             'districts': list(district_counts),
@@ -115,3 +130,4 @@ class GovAnalyticsSummaryView(APIView):
                 'industry_partners': industry_records,
             },
         })
+

@@ -56,7 +56,7 @@ class OrganizationListView(generics.ListCreateAPIView):
 
 class UserListView(generics.ListAPIView):
     serializer_class = UserProfileSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         qs = User.objects.select_related('university', 'organization').all().order_by('id')
@@ -67,3 +67,37 @@ class UserListView(generics.ListAPIView):
         if university_id:
             qs = qs.filter(university_id=university_id)
         return qs
+
+
+class UniversityStudentsListView(generics.ListAPIView):
+    serializer_class = UserProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return User.objects.select_related('university').filter(
+            role=User.Role.STUDENT,
+            university_id=self.kwargs['university_id']
+        ).order_by('name')
+
+
+class UniversityMentorsListView(generics.ListAPIView):
+    serializer_class = UserProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return User.objects.select_related('university').filter(
+            role=User.Role.FACULTY_MENTOR,
+            university_id=self.kwargs['university_id']
+        ).order_by('name')
+
+
+class UniversityCoordinatorsListView(generics.ListAPIView):
+    serializer_class = UserProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return User.objects.select_related('university').filter(
+            role=User.Role.UNIVERSITY_COORDINATOR,
+            university_id=self.kwargs['university_id']
+        ).order_by('name')
+

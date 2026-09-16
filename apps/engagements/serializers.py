@@ -14,13 +14,15 @@ class IndustryEngagementSerializer(serializers.ModelSerializer):
     district = serializers.CharField(source='issue.district', read_only=True)
     university_name = serializers.SerializerMethodField()
     pitch_title = serializers.CharField(source='pitch.title', read_only=True, allow_null=True)
+    project_title = serializers.CharField(source='project.title', read_only=True, allow_null=True)
 
     class Meta:
         model = IndustryEngagement
         fields = [
             'id', 'issue', 'issue_title', 'issue_status', 'category', 'district',
             'university_name',
-            'pitch', 'pitch_title', 'industry_org', 'industry_org_details',
+            'pitch', 'pitch_title', 'project', 'project_title',
+            'industry_org', 'industry_org_details',
             'created_by', 'created_by_details',
             'engagement_type', 'initiator', 'status',
             'proposal_notes', 'response_notes',
