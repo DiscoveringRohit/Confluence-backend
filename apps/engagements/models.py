@@ -11,6 +11,9 @@ class IndustryEngagement(models.Model):
         PROTOTYPING = 'prototyping', 'Prototyping & Lab Access'
         TECHNOLOGY_TRANSFER = 'technology_transfer', 'Technology Transfer & Licensing'
 
+    EngagementType.CSR_SPONSORSHIP = EngagementType.FUNDING
+    EngagementType.INCUBATION = EngagementType.PROTOTYPING
+
     class Initiator(models.TextChoices):
         UNIVERSITY = 'university', 'University'
         INDUSTRY = 'industry', 'Industry Partner'
@@ -34,6 +37,14 @@ class IndustryEngagement(models.Model):
         blank=True,
         related_name='industry_engagements',
         help_text="Assigned pitch/solution this partnership attaches to"
+    )
+    project = models.ForeignKey(
+        'pitches.Project',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='industry_engagements',
+        help_text="Active implementation project this partnership supports"
     )
     industry_org = models.ForeignKey(
         Organization,

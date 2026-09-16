@@ -5,10 +5,27 @@ from apps.users.models import University
 class Issue(models.Model):
     class Status(models.TextChoices):
         SUBMITTED = 'submitted', 'Submitted'
+        VALIDATING = 'validating', 'Under Moderation'
         VALIDATED = 'validated', 'Validated & Published'
+        AVAILABLE_FOR_ADOPTION = 'available_for_adoption', 'Available for Adoption'
+        ADOPTION_REQUESTED = 'adoption_requested', 'Adoption Requested'
+        REJECTED = 'rejected', 'Rejected'
+        DUPLICATE = 'duplicate', 'Duplicate'
         ADOPTED = 'adopted', 'Adopted by University'
+        OPEN = 'open', 'Open for Solutions'
+        UNDER_REVIEW = 'under_review', 'Solutions Under Review'
+        SOLUTION_SELECTED = 'solution_selected', 'Solution Selected'
         ASSIGNED = 'assigned', 'Team Assigned'
+        PROJECT = 'project', 'Implementation Project Active'
+        PROTOTYPE = 'prototype', 'Prototype in Development'
+        PILOT = 'pilot', 'Pilot Testing in Field'
+        DEPLOYED = 'deployed', 'Deployed in Field'
+        AWAITING_CITIZEN_VERIFICATION = 'awaiting_citizen_verification', 'Awaiting Citizen Verification'
+        AWAITING_VERIFICATION = 'awaiting_verification', 'Awaiting Citizen Verification (Alias)'
+        VERIFIED = 'verified', 'Verified by Citizen'
+        FAILED = 'failed', 'Verification Failed'
         RESOLVED = 'resolved', 'Resolved & Tracked'
+        REOPENED = 'reopened', 'Reopened'
 
     class Category(models.TextChoices):
         EDUCATION = 'education', 'Education'
@@ -23,9 +40,14 @@ class Issue(models.Model):
         RURAL_LIVELIHOODS = 'rural_livelihoods', 'Rural Livelihoods'
         OTHER = 'other', 'Other'
 
+    public_id = models.CharField(max_length=50, blank=True, null=True, unique=True, db_index=True)
     title = models.CharField(max_length=255)
     description = models.TextField(help_text="Detailed description of the problem")
+    context = models.TextField(blank=True, help_text="Background context for the challenge")
     expected_outcome = models.TextField(help_text="Expected social impact or desired solution")
+    requirements = models.TextField(blank=True, help_text="Functional and domain requirements")
+    constraints = models.TextField(blank=True, help_text="Technical, legal, operational or geographic constraints")
+    acceptance_criteria = models.TextField(blank=True, help_text="Requirements, target metrics, and acceptance criteria")
     
     # Media
     photo = models.ImageField(upload_to='issues/photos/', blank=True, null=True, help_text="Mandatory photographic evidence")
@@ -64,17 +86,177 @@ class Issue(models.Model):
     citizen_verified_resolved = models.BooleanField(null=True, blank=True)
     citizen_feedback_on_resolution = models.TextField(blank=True)
 
+    # Issue 42: Explicit Challenge Ownership Model
+    validated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='validated_issues',
+        help_text="Authority/moderator who validated and approved this challenge"
+    )
+    maintaining_university = models.ForeignKey(
+        'users.University',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='maintained_issues',
+        help_text="University currently maintaining this challenge repository"
+    )
+    managed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='managed_issues',
+        help_text="University coordinator who actively manages this repository"
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    @property
+    def ownership(self):
+        """Authoritative ownership model (Section 42)."""
+        creator = {
+            'id': self.submitted_by_id,
+            'name': getattr(self.submitted_by, 'name', '') or self.submitted_by.email,
+            'role': 'citizen'
+        } if self.submitted_by else None
+
+        validator = {
+            'id': self.validated_by_id,
+            'name': getattr(self.validated_by, 'name', '') or self.validated_by.email,
+            'role': 'authority'
+        } if self.validated_by else None
+
+        univ = None
+        if self.maintaining_university:
+            univ = {
+                'id': self.maintaining_university_id,
+                'name': self.maintaining_university.name,
+                'code': getattr(self.maintaining_university, 'code', '')
+            }
+        elif hasattr(self, 'adoption') and self.adoption and self.adoption.university:
+            univ = {
+                'id': self.adoption.university_id,
+                'name': self.adoption.university.name,
+                'code': getattr(self.adoption.university, 'code', '')
+            }
+
+        mgr = None
+        if self.managed_by:
+            mgr = {
+                'id': self.managed_by_id,
+                'name': getattr(self.managed_by, 'name', '') or self.managed_by.email,
+                'role': 'coordinator'
+            }
+        elif hasattr(self, 'adoption') and self.adoption and self.adoption.coordinator:
+            mgr = {
+                'id': self.adoption.coordinator_id,
+                'name': getattr(self.adoption.coordinator, 'name', '') or self.adoption.coordinator.email,
+                'role': 'coordinator'
+            }
+
+        return {
+            'created_by': creator,
+            'validated_by': validator,
+            'maintaining_university': univ,
+            'managed_by': mgr,
+        }
+
+    @property
+    def created_by(self):
+        """Specification Section 58 alias to submitted_by."""
+        return self.submitted_by
+
+    @property
+    def challenge_title(self):
+        """Specification Section 58 & 81 alias to title."""
+        return self.title
+
+    @property
+    def maintainer_university(self):
+        """Specification Section 58 alias to maintaining_university."""
+        return self.maintaining_university
+
+    @property
+    def location(self):
+        """Specification Section 58 structured location dictionary."""
+        return {
+            'latitude': float(self.latitude) if self.latitude is not None else None,
+            'longitude': float(self.longitude) if self.longitude is not None else None,
+            'district': self.district,
+            'address': self.address,
+        }
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if not self.public_id and self.id:
+            self.public_id = f"CH-{self.id:05d}"
+            super().save(update_fields=['public_id'])
+
+    def transition_status(self, new_status, actor=None, reason=''):
+        prev_status = self.status
+        self.status = new_status
+        self.save(update_fields=['status', 'updated_at'])
+        history = IssueStatusHistory.objects.create(
+            issue=self,
+            previous_status=prev_status,
+            new_status=new_status,
+            actor=actor,
+            reason=reason or ''
+        )
+        log_activity(
+            issue=self,
+            actor=actor,
+            event_type='STATUS_TRANSITION',
+            description=f"Status changed from {prev_status} to {new_status}. {reason}".strip(),
+            object_type='issue',
+            object_id=str(self.id),
+            metadata={'previous_status': prev_status, 'new_status': new_status, 'reason': reason or ''}
+        )
+        return history
+
     def __str__(self):
-        return f"[{self.get_status_display()}] {self.title} ({self.district})"
+        return f"[{self.public_id or self.id}] [{self.get_status_display()}] {self.title} ({self.district})"
+
+
+class IssueStatusHistory(models.Model):
+    issue = models.ForeignKey(
+        Issue,
+        on_delete=models.CASCADE,
+        related_name='status_history'
+    )
+    previous_status = models.CharField(max_length=30)
+    new_status = models.CharField(max_length=30)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='issue_status_changes'
+    )
+    reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Issue #{self.issue_id}: {self.previous_status} -> {self.new_status} by {self.actor}"
 
 
 class Adoption(models.Model):
     class Mode(models.TextChoices):
         SELF_ADOPTED = 'self_adopted', 'University Self-Adopted'
         NOMINATION_APPROVED = 'nomination_approved', 'Student Nomination Approved'
+
+    class Status(models.TextChoices):
+        APPROVED = 'approved', 'Approved'
+        REQUESTED = 'requested', 'Requested'
+        REJECTED = 'rejected', 'Rejected'
+        CANCELLED = 'cancelled', 'Cancelled'
 
     issue = models.OneToOneField(
         Issue,
@@ -86,6 +268,19 @@ class Adoption(models.Model):
         on_delete=models.CASCADE,
         related_name='adopted_issues'
     )
+    coordinator = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='coordinated_adoptions',
+        help_text="University coordinator who approved or adopted this issue"
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.APPROVED
+    )
     mode = models.CharField(max_length=30, choices=Mode.choices, default=Mode.SELF_ADOPTED)
     nominated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -96,6 +291,27 @@ class Adoption(models.Model):
         help_text="Student who initiated the nomination"
     )
     adopted_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp when adoption was approved by coordinator")
+
+    @property
+    def challenge(self):
+        """Specification Section 60 alias to issue."""
+        return self.issue
+
+    @challenge.setter
+    def challenge(self, value):
+        self.issue = value
+
+    @property
+    def created_at(self):
+        """Specification Section 60 alias to adopted_at."""
+        return self.adopted_at
+
+    def save(self, *args, **kwargs):
+        from django.utils import timezone
+        if self.status == self.Status.APPROVED and not self.approved_at:
+            self.approved_at = timezone.now()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.university.name} adopted {self.issue.title}"
@@ -104,6 +320,7 @@ class Adoption(models.Model):
 class StudentNomination(models.Model):
     """
     Tracks nomination requests sent by students to their university coordinator.
+    Specification Section 59 ChallengeNomination model.
     """
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending Review'
@@ -130,8 +347,265 @@ class StudentNomination(models.Model):
     reviewed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    @property
+    def challenge(self):
+        """Specification Section 59 alias to issue."""
+        return self.issue
+
+    @challenge.setter
+    def challenge(self, value):
+        self.issue = value
+
     class Meta:
         unique_together = ('issue', 'university', 'student')
 
     def __str__(self):
         return f"Nomination: {self.student.name} -> {self.issue.title} ({self.get_status_display()})"
+
+
+# Specification Section 59 & 60 Model Aliases
+ChallengeNomination = StudentNomination
+ChallengeAdoption = Adoption
+
+
+class OpenCall(models.Model):
+    """
+    Real backend representation of an Open Call for a challenge (P0 Issue 6).
+    """
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        UPCOMING = 'upcoming', 'Upcoming'
+        OPEN = 'open', 'Open'
+        CLOSED = 'closed', 'Closed'
+        CANCELLED = 'cancelled', 'Cancelled'
+
+    issue = models.ForeignKey(
+        Issue,
+        on_delete=models.CASCADE,
+        related_name='open_calls'
+    )
+    university = models.ForeignKey(
+        University,
+        on_delete=models.CASCADE,
+        related_name='open_calls'
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_open_calls'
+    )
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+    opening_date = models.DateField(null=True, blank=True)
+    closing_date = models.DateField(null=True, blank=True)
+    eligibility = models.TextField(blank=True)
+    required_skills = models.TextField(blank=True)
+    departments = models.CharField(max_length=255, blank=True)
+    funding = models.CharField(max_length=100, blank=True)
+    evaluation_criteria = models.TextField(blank=True)
+    max_teams = models.IntegerField(default=10)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.OPEN
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def challenge(self):
+        """Specification Section 61 alias to issue."""
+        return self.issue
+
+    @challenge.setter
+    def challenge(self, value):
+        self.issue = value
+
+    def __str__(self):
+        return f"Open Call: {self.title} ({self.university.name} - {self.get_status_display()})"
+
+
+class CitizenVerification(models.Model):
+    """
+    Mandatory citizen verification gate recording the real field outcome (P0 Issue 10 & P1 Issue 36-37).
+    """
+    class Result(models.TextChoices):
+        VERIFIED = 'verified', 'Verified Resolved'
+        NOT_RESOLVED = 'not_resolved', 'Not Resolved'
+
+    issue = models.ForeignKey(
+        Issue,
+        on_delete=models.CASCADE,
+        related_name='citizen_verifications'
+    )
+    citizen = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='verifications'
+    )
+    result = models.CharField(max_length=20, choices=Result.choices)
+    reason = models.TextField(blank=True, help_text="Reason for verdict")
+    what_is_still_wrong = models.TextField(blank=True, help_text="Detailed explanation of what remains unresolved")
+    evidence = models.TextField(blank=True, help_text="Links, test readings, or proof")
+    photo_video_url = models.URLField(max_length=500, blank=True, help_text="Photo or video URL evidencing unresolved condition")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def challenge(self):
+        """Specification Section 69 alias to issue."""
+        return self.issue
+
+    @challenge.setter
+    def challenge(self, value):
+        self.issue = value
+
+    def __str__(self):
+        return f"CitizenVerification #{self.id} for Issue #{self.issue_id}: {self.get_result_display()} by {self.citizen}"
+
+
+class ActivityEvent(models.Model):
+    """
+    Unified activity event timeline for a challenge repository (P0 Issue 8 & P1 Issue 38).
+    """
+    issue = models.ForeignKey(
+        Issue,
+        on_delete=models.CASCADE,
+        related_name='activity_timeline'
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='activity_events'
+    )
+    event_type = models.CharField(max_length=50)
+    description = models.TextField(blank=True)
+    object_type = models.CharField(max_length=50, blank=True)
+    object_id = models.CharField(max_length=50, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def challenge(self):
+        """Specification Section 68 alias to issue."""
+        return self.issue
+
+    @challenge.setter
+    def challenge(self, value):
+        self.issue = value
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"[{self.event_type}] Issue #{self.issue_id} by {self.actor}: {self.description[:50]}"
+
+
+def log_activity(issue, actor, event_type, description='', object_type='', object_id='', metadata=None):
+    return ActivityEvent.objects.create(
+        issue=issue,
+        actor=actor,
+        event_type=event_type,
+        description=description,
+        object_type=object_type,
+        object_id=str(object_id) if object_id else '',
+        metadata=metadata or {}
+    )
+
+
+class DiscussionComment(models.Model):
+    """
+    Challenge, Solution & Project technical discussion system (Section 40 & P1 Issue 18 & 40).
+    Supports discussions across challenges, solution proposals, and project implementation.
+    """
+    class TargetType(models.TextChoices):
+        CHALLENGE = 'challenge', 'Challenge Discussion'
+        SOLUTION = 'solution', 'Solution Technical Discussion'
+        PROJECT = 'project', 'Project Technical Discussion'
+
+    TargetType.ISSUE = TargetType.CHALLENGE
+    TargetType.PITCH = TargetType.SOLUTION
+
+    target_type = models.CharField(max_length=20, choices=TargetType.choices, default=TargetType.CHALLENGE)
+    issue = models.ForeignKey(Issue, on_delete=models.CASCADE, related_name='discussions', null=True, blank=True)
+    pitch = models.ForeignKey('pitches.Pitch', on_delete=models.CASCADE, related_name='discussions', null=True, blank=True)
+    project = models.ForeignKey('pitches.Project', on_delete=models.CASCADE, related_name='discussions', null=True, blank=True)
+    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='discussion_comments')
+    category = models.CharField(
+        max_length=30,
+        default='general',
+        help_text="Discussion topic category (Issue 41: clarification, context, requirements, constraints, evidence, technical, review, implementation, changes, mentorship, general)"
+    )
+    content = models.TextField(help_text="Discussion message, technical comment, or requirement inquiry")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def challenge(self):
+        """Specification Section 67 alias to issue."""
+        return self.issue
+
+    @challenge.setter
+    def challenge(self, value):
+        self.issue = value
+
+    @property
+    def solution(self):
+        """Specification Section 67 alias to pitch."""
+        return self.pitch
+
+    @solution.setter
+    def solution(self, value):
+        self.pitch = value
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.get_target_type_display()} [{self.category}] by {self.author}: {self.content[:40]}"
+
+
+# Specification Section 67 Model Aliases
+Discussion = DiscussionComment
+Comment = DiscussionComment
+
+
+class ChallengeCollaborator(models.Model):
+    """
+    Challenge Collaborators & repository permissions (Section 43).
+    Supports roles: maintainer, coordinator, faculty, student_contributor, government, industry_partner, citizen_contributor.
+    """
+    class Role(models.TextChoices):
+        MAINTAINER = 'maintainer', 'Maintainer'
+        COORDINATOR = 'coordinator', 'University Coordinator'
+        FACULTY = 'faculty', 'Faculty Mentor'
+        STUDENT_CONTRIBUTOR = 'student_contributor', 'Student Contributor'
+        GOVERNMENT = 'government', 'Government Authority'
+        INDUSTRY_PARTNER = 'industry_partner', 'Industry Partner'
+        CITIZEN_CONTRIBUTOR = 'citizen_contributor', 'Citizen Contributor'
+
+    issue = models.ForeignKey(Issue, on_delete=models.CASCADE, related_name='collaborators')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='challenge_collaborations')
+    role = models.CharField(max_length=30, choices=Role.choices, default=Role.CITIZEN_CONTRIBUTOR)
+    permissions = models.JSONField(default=dict, blank=True, help_text="Custom collaborator permissions/capabilities")
+    added_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='collaborators_added'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+        unique_together = ('issue', 'user')
+
+    def __str__(self):
+        return f"{self.user} as {self.get_role_display()} on Issue #{self.issue_id}"
+
+
+
