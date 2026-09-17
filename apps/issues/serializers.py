@@ -140,6 +140,9 @@ class IssueSerializer(serializers.ModelSerializer):
     collaborators = ChallengeCollaboratorSerializer(many=True, read_only=True)
     ownership = serializers.ReadOnlyField()
     location = serializers.ReadOnlyField()
+    user_nomination = serializers.SerializerMethodField()
+    is_adopted_by_user_university = serializers.SerializerMethodField()
+    can_pitch = serializers.SerializerMethodField()
 
     class Meta:
         model = Issue
@@ -157,6 +160,7 @@ class IssueSerializer(serializers.ModelSerializer):
             'duplicate_of', 'duplicate_of_details',
             'is_escalated', 'citizen_verified_resolved', 'citizen_feedback_on_resolution',
             'adoption_details', 'status_history', 'open_calls', 'citizen_verifications',
+            'user_nomination', 'is_adopted_by_user_university', 'can_pitch',
             'created_at', 'updated_at'
         ]
         read_only_fields = [
@@ -166,8 +170,54 @@ class IssueSerializer(serializers.ModelSerializer):
             'managed_by', 'managed_by_details',
             'ownership', 'collaborators', 'location',
             'duplicate_of_details', 'adoption_details', 'status_history',
-            'open_calls', 'citizen_verifications', 'created_at', 'updated_at'
+            'open_calls', 'citizen_verifications',
+            'user_nomination', 'is_adopted_by_user_university', 'can_pitch',
+            'created_at', 'updated_at'
         ]
+
+    def get_is_adopted_by_user_university(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+        uni_id = getattr(request.user, 'university_id', None)
+        if not uni_id:
+            return False
+        if hasattr(obj, 'adoption') and obj.adoption and getattr(obj.adoption, 'status', None) == 'approved':
+            if obj.adoption.university_id == uni_id:
+                return True
+        if obj.maintaining_university_id == uni_id:
+            return True
+        return False
+
+    def get_user_nomination(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or not request.user.is_authenticated:
+            return None
+        if getattr(request.user, 'role', None) != 'student':
+            return None
+        nom = obj.student_nominations.filter(student=request.user).first()
+        if nom:
+            return {
+                'id': nom.id,
+                'status': nom.status,
+                'status_display': nom.get_status_display(),
+                'rationale': nom.rationale,
+                'created_at': nom.created_at
+            }
+        return None
+
+    def get_can_pitch(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+        if getattr(request.user, 'role', None) != 'student':
+            return False
+        if not getattr(request.user, 'university_id', None):
+            return False
+        # Pitching is strictly allowed ONLY if issue is adopted and adopted by the student's university
+        if obj.status not in [Issue.Status.ADOPTED, Issue.Status.OPEN]:
+            return False
+        return self.get_is_adopted_by_user_university(obj)
 
     def get_duplicate_of_details(self, obj):
         if obj.duplicate_of:
