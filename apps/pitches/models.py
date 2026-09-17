@@ -537,13 +537,40 @@ class Project(models.Model):
     def __str__(self):
         return f"Project [{self.public_id or self.id}]: {self.title} [{self.get_status_display()}]"
 
-    def transition_status(self, new_status, actor=None, reason=''):
+    def transition_status(self, new_status, actor=None, reason='', extra_update_fields=None):
+        if self.status == new_status:
+            return
+
+        VALID_TRANSITIONS = {
+            self.Status.CREATED: [self.Status.PLANNING],
+            self.Status.PLANNING: [self.Status.PROTOTYPE, self.Status.PILOT],
+            self.Status.PROTOTYPE: [self.Status.PILOT, self.Status.DEPLOYMENT_READY],
+            self.Status.PILOT: [self.Status.DEPLOYMENT_READY],
+            self.Status.DEPLOYMENT_READY: [self.Status.DEPLOYED],
+            self.Status.DEPLOYED: [self.Status.AWAITING_CITIZEN_VERIFICATION],
+            self.Status.AWAITING_CITIZEN_VERIFICATION: [self.Status.VERIFIED, self.Status.REOPENED],
+            self.Status.VERIFIED: [self.Status.CLOSED],
+            self.Status.REOPENED: [self.Status.PILOT, self.Status.PROTOTYPE],
+        }
+
+        if self.status == self.Status.CLOSED:
+            from django.core.exceptions import ValidationError
+            raise ValidationError(f"Cannot transition project from terminal state '{self.status}'.")
+
+        allowed = VALID_TRANSITIONS.get(self.status, [])
+        if new_status not in allowed:
+            from django.core.exceptions import ValidationError
+            raise ValidationError(f"Invalid project transition from '{self.status}' to '{new_status}'. Allowed transitions: {allowed}")
+
         from apps.issues.models import log_activity
         old_status = self.status
         self.status = new_status
         if new_status == self.Status.DEPLOYED and not self.deployed_at:
             self.deployed_at = timezone.now()
-        self.save(update_fields=['status', 'deployed_at', 'updated_at'])
+        fields = {'status', 'deployed_at', 'updated_at'}
+        if extra_update_fields:
+            fields.update(extra_update_fields)
+        self.save(update_fields=list(fields))
         try:
             log_activity(
                 issue=self.challenge,

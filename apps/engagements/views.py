@@ -5,7 +5,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from .models import IndustryEngagement
 from .serializers import IndustryEngagementSerializer
-from apps.issues.models import Issue, ChallengeCollaborator
+from apps.issues.models import Issue, ChallengeCollaborator, log_activity
 from apps.pitches.models import Pitch
 from apps.users.models import User
 from apps.notifications.models import Notification
@@ -128,6 +128,27 @@ class RespondEngagementView(APIView):
         if action not in ['accept', 'decline', 'activate', 'complete']:
             return Response({'error': 'Action must be accept, decline, activate, or complete'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # State transition matrix validation (P1 Issue 46)
+        VALID_TRANSITIONS = {
+            IndustryEngagement.Status.REQUESTED: ['accept', 'decline'],
+            IndustryEngagement.Status.ACCEPTED: ['activate', 'decline'],
+            IndustryEngagement.Status.ACTIVE: ['complete'],
+        }
+
+        current_status = engagement.status
+        if current_status in [IndustryEngagement.Status.DECLINED, IndustryEngagement.Status.COMPLETED]:
+            return Response(
+                {'error': f"Engagement is in terminal state '{current_status}' and cannot be modified."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        allowed_actions = VALID_TRANSITIONS.get(current_status, [])
+        if action not in allowed_actions:
+            return Response(
+                {'error': f"Cannot perform action '{action}' on engagement with status '{current_status}'. Allowed actions: {', '.join(allowed_actions)}."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         # Participant Authorization Verification
         user = request.user
         is_staff = user.is_staff or getattr(user, 'role', '') == 'gov_admin'
@@ -185,6 +206,25 @@ class RespondEngagementView(APIView):
                 engagement.project = engagement.issue.projects.first()
 
         engagement.save()
+
+        # Activity logging (H-04 audit)
+        try:
+            log_activity(
+                issue=engagement.issue,
+                actor=request.user,
+                event_type=f'ENGAGEMENT_{action.upper()}',
+                description=f"Industry engagement for Problem #{engagement.issue.id} with {engagement.industry_org.name if engagement.industry_org else 'Partner'} transitioned from {current_status} to {engagement.status} by {request.user.name or request.user.email}.",
+                object_type='engagement',
+                object_id=str(engagement.id),
+                metadata={
+                    'engagement_id': engagement.id,
+                    'previous_status': current_status,
+                    'new_status': engagement.status,
+                    'action': action
+                }
+            )
+        except Exception:
+            pass
 
         # If accepted or activated, register industry partner in ChallengeCollaborator
         if action in ['accept', 'activate']:

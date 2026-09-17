@@ -441,7 +441,22 @@ class ProjectSerializer(serializers.ModelSerializer):
             'deployed_at', 'progress_pct', 'milestone_counts',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'public_id', 'created_at', 'updated_at', 'deployed_at']
+        read_only_fields = [
+            'id', 'public_id', 'status', 'deployment_status',
+            'deployment_evidence', 'outcome', 'deployed_at',
+            'created_at', 'updated_at'
+        ]
+
+    def update(self, instance, validated_data):
+        # Workflow and relationship bound fields cannot be mutated via PATCH/PUT (C-02)
+        immutable_fields = [
+            'solution', 'challenge', 'university', 'status',
+            'deployment_status', 'deployment_evidence', 'outcome'
+        ]
+        for field in immutable_fields:
+            validated_data.pop(field, None)
+        return super().update(instance, validated_data)
+
 
     def get_challenge_details(self, obj):
         if obj.challenge:

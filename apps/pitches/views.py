@@ -1,4 +1,4 @@
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
@@ -38,6 +38,7 @@ from apps.users.permissions import (
     IsUniversityAffiliated,
     IsCitizen,
 )
+from .permissions import ProjectAccessPermission
 
 def get_pitch_by_pk_or_public_id(pk):
     if not pk:
@@ -1033,10 +1034,39 @@ class ProjectListCreateView(generics.ListCreateAPIView):
 class ProjectDetailView(generics.RetrieveUpdateAPIView):
     """
     Detailed project views with nested milestone roadmaps (Issue 32 & 33).
+    Secured with object-level permissions and role-filtered queryset (C-02).
     """
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, ProjectAccessPermission]
     serializer_class = ProjectDetailSerializer
-    queryset = Project.objects.all().select_related('solution', 'challenge', 'university', 'mentor').prefetch_related('team', 'milestones')
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Project.objects.all().select_related(
+            'solution', 'challenge', 'university', 'mentor'
+        ).prefetch_related('team', 'milestones', 'industry_engagements')
+
+        if not user or not user.is_authenticated:
+            return qs.none()
+
+        if user.is_staff or getattr(user, 'role', None) == 'gov_admin':
+            return qs
+
+        if getattr(user, 'role', None) in ['university_coordinator', 'faculty_mentor'] and user.university_id:
+            return qs.filter(models.Q(university_id=user.university_id) | models.Q(mentor_id=user.id))
+
+        if getattr(user, 'role', None) == 'student':
+            return qs.filter(team=user)
+
+        if getattr(user, 'role', None) == 'citizen':
+            return qs.filter(challenge__submitted_by=user)
+
+        if getattr(user, 'role', None) == 'industry_partner' and user.organization_id:
+            return qs.filter(industry_engagements__industry_org_id=user.organization_id)
+
+        if user.university_id:
+            return qs.filter(university_id=user.university_id)
+
+        return qs.none()
 
     def get_object(self):
         pk = self.kwargs.get('pk')
@@ -1244,20 +1274,37 @@ class ProjectSubmitDeploymentView(APIView):
         if not (is_team or is_coord or is_mentor or user.is_staff):
             raise PermissionDenied("Only the project team or coordinator can submit deployment evidence.")
 
+        allowed_source_states = [Project.Status.PILOT, Project.Status.PROTOTYPE]
+        if project.status not in allowed_source_states:
+            return Response(
+                {'error': f'Deployment evidence can only be submitted from Prototype or Pilot status (current status: {project.get_status_display()}).'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         evidence = request.data.get('deployment_evidence', '').strip()
         if not evidence:
             return Response({'error': 'Deployment evidence (reports, photos, telemetry, or deliverables) is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         outcome = request.data.get('outcome', '').strip()
 
-        project.deployment_evidence = evidence
-        if outcome:
-            project.outcome = outcome
-        project.transition_status(
-            Project.Status.DEPLOYMENT_READY,
-            actor=user,
-            reason="Team submitted final deployment package for mentor and coordinator sign-off."
-        )
+        with transaction.atomic():
+            project = Project.objects.select_for_update().get(pk=project.pk)
+            if project.status not in allowed_source_states:
+                return Response(
+                    {'error': f'Deployment evidence can only be submitted from Prototype or Pilot status (current status: {project.get_status_display()}).'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            project.deployment_evidence = evidence
+            extra_fields = ['deployment_evidence']
+            if outcome:
+                project.outcome = outcome
+                extra_fields.append('outcome')
+            project.transition_status(
+                Project.Status.DEPLOYMENT_READY,
+                actor=user,
+                reason="Team submitted final deployment package for mentor and coordinator sign-off.",
+                extra_update_fields=extra_fields
+            )
 
         return Response({
             'message': 'Deployment package submitted. Pending faculty and university verification.',
@@ -1267,7 +1314,7 @@ class ProjectSubmitDeploymentView(APIView):
 
 class ProjectApproveDeploymentView(APIView):
     """
-    Mentor/Coordinator verifies evidence and approves field deployment (Issue 35).
+    Mentor/Coordinator verifies evidence and approves field deployment (Issue 35 & C-04).
     Transitions project to DEPLOYED -> AWAITING_CITIZEN_VERIFICATION,
     and transitions underlying challenge Issue to AWAITING_VERIFICATION.
     Direct setting to RESOLVED by students or mentors is forbidden.
@@ -1285,29 +1332,46 @@ class ProjectApproveDeploymentView(APIView):
         if not (is_coord or is_mentor or user.is_staff):
             raise PermissionDenied("Only university coordinators or assigned faculty mentors can approve deployment.")
 
-        if not project.deployment_evidence:
+        if project.status != Project.Status.DEPLOYMENT_READY:
+            return Response(
+                {'error': f'Project must be in Deployment Ready status to approve deployment (current status: {project.get_status_display()}).'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not project.deployment_evidence or not project.deployment_evidence.strip():
             return Response({'error': 'Cannot approve deployment without submitted deployment evidence.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Transition Project: DEPLOYED -> AWAITING_CITIZEN_VERIFICATION
-        project.deployment_status = 'deployed'
-        project.transition_status(
-            Project.Status.DEPLOYED,
-            actor=user,
-            reason="Faculty mentor and university coordinator verified deployment evidence and approved field pilot."
-        )
-        project.transition_status(
-            Project.Status.AWAITING_CITIZEN_VERIFICATION,
-            actor=user,
-            reason="Project awaiting field outcome confirmation from original citizen reporter."
-        )
+        with transaction.atomic():
+            project = Project.objects.select_for_update().get(pk=project.pk)
+            if project.status != Project.Status.DEPLOYMENT_READY:
+                return Response(
+                    {'error': f'Project must be in Deployment Ready status to approve deployment (current status: {project.get_status_display()}).'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if not project.deployment_evidence or not project.deployment_evidence.strip():
+                return Response({'error': 'Cannot approve deployment without submitted deployment evidence.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Transition underlying Challenge Issue to AWAITING_VERIFICATION
-        issue = project.challenge
-        issue.transition_status(
-            Issue.Status.AWAITING_VERIFICATION,
-            actor=user,
-            reason=f"Project #{project.id} field deployment approved. Awaiting citizen outcome verification."
-        )
+            # Transition Project: DEPLOYED -> AWAITING_CITIZEN_VERIFICATION
+            project.deployment_status = 'deployed'
+            project.transition_status(
+                Project.Status.DEPLOYED,
+                actor=user,
+                reason="Faculty mentor and university coordinator verified deployment evidence and approved field pilot.",
+                extra_update_fields=['deployment_status']
+            )
+            project.transition_status(
+                Project.Status.AWAITING_CITIZEN_VERIFICATION,
+                actor=user,
+                reason="Project awaiting field outcome confirmation from original citizen reporter."
+            )
+
+            # Transition underlying Challenge Issue to AWAITING_VERIFICATION with row lock
+            issue = Issue.objects.select_for_update().get(pk=project.challenge_id)
+            issue.transition_status(
+                Issue.Status.AWAITING_VERIFICATION,
+                actor=user,
+                reason=f"Project #{project.id} field deployment approved. Awaiting citizen outcome verification."
+            )
 
         try:
             log_activity(
@@ -1334,15 +1398,24 @@ class ProjectDiscussionListCreateView(generics.ListCreateAPIView):
     Allows student team, mentor, coordinator, and industry partners to collaborate.
     """
     serializer_class = DiscussionCommentSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, ProjectAccessPermission]
     pagination_class = None
 
-    def get_queryset(self):
+    def get_project(self):
         project_id = self.kwargs.get('project_id')
         project = get_project_by_pk_or_public_id(project_id)
-        resolved_id = project.id if project else None
+        if not project:
+            raise NotFound('Project not found.')
+        perm = ProjectAccessPermission()
+        fake_req = type('Request', (), {'user': self.request.user, 'method': 'GET'})()
+        if not perm.has_object_permission(fake_req, self, project):
+            raise PermissionDenied('You do not have permission to access discussions for this project.')
+        return project
+
+    def get_queryset(self):
+        project = self.get_project()
         qs = DiscussionComment.objects.filter(
-            project_id=resolved_id,
+            project_id=project.id,
             target_type='project'
         ).select_related('author').order_by('created_at')
         cat = self.request.query_params.get('category')
@@ -1351,11 +1424,7 @@ class ProjectDiscussionListCreateView(generics.ListCreateAPIView):
         return qs
 
     def perform_create(self, serializer):
-        project_id = self.kwargs.get('project_id')
-        project = get_project_by_pk_or_public_id(project_id)
-        if not project:
-            raise ValidationError({'project': 'Project does not exist.'})
-
+        project = self.get_project()
         cat = self.request.data.get('category', 'general')
         comment = serializer.save(
             author=self.request.user,
@@ -1384,12 +1453,14 @@ class ProjectStatusHistoryView(APIView):
     Status transition audit log for a project (P1 Issue 39).
     Returns chronological status transition events.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated, ProjectAccessPermission]
 
     def get(self, request, pk):
         project = get_project_by_pk_or_public_id(pk)
         if not project:
             return Response({'error': 'Project not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        self.check_object_permissions(request, project)
 
         events = ActivityEvent.objects.filter(
             issue=project.challenge,
@@ -1457,7 +1528,7 @@ class ProjectIndustryEngagementListView(generics.ListAPIView):
     """
     Lists all industry engagements scoped to a specific project (Issue 51).
     """
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, ProjectAccessPermission]
 
     def get_serializer_class(self):
         from apps.engagements.serializers import IndustryEngagementSerializer
@@ -1466,8 +1537,10 @@ class ProjectIndustryEngagementListView(generics.ListAPIView):
     def get_queryset(self):
         project_id = self.kwargs.get('project_id')
         project = get_project_by_pk_or_public_id(project_id)
-        resolved_id = project.id if project else None
-        return IndustryEngagement.objects.filter(project_id=resolved_id).select_related('industry_org', 'created_by').order_by('-created_at')
+        if not project:
+            raise NotFound('Project not found.')
+        self.check_object_permissions(self.request, project)
+        return IndustryEngagement.objects.filter(project_id=project.id).select_related('industry_org', 'created_by').order_by('-created_at')
 
 
 class GenerateCertificateView(APIView):
@@ -1610,6 +1683,23 @@ class VerifyCertificateView(APIView):
                 'citizen_verified': cert.project.challenge.citizen_verified_resolved or cert.project.status == Project.Status.VERIFIED
             }
         }, status=status.HTTP_200_OK)
+
+
+class UserCertificateListView(generics.ListAPIView):
+    """
+    Lists all verified outcome certificates awarded to the authenticated user (Issue 55 / H-06).
+    """
+    serializer_class = CertificateSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
+
+    def get_queryset(self):
+        return Certificate.objects.filter(
+            recipient=self.request.user
+        ).select_related(
+            'recipient', 'project', 'challenge', 'solution', 'project__university'
+        ).order_by('-issued_at')
+
 
 
 
