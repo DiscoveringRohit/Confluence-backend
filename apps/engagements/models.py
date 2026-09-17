@@ -78,3 +78,31 @@ class IndustryEngagement(models.Model):
 
     def __str__(self):
         return f"{self.industry_org.name} <-> Issue #{self.issue_id} ({self.get_status_display()})"
+
+
+class Funding(models.Model):
+    class FundingType(models.TextChoices):
+        CSR_GRANT = 'csr_grant', 'CSR Grant'
+        GOVT_SCHEME = 'govt_scheme', 'Government Innovation Scheme'
+        EQUITY = 'equity', 'Incubation Equity / Seed'
+        PRIZE = 'prize', 'Competition / Hackathon Prize'
+
+    class Status(models.TextChoices):
+        PROPOSED = 'proposed', 'Funding Proposed'
+        APPROVED = 'approved', 'Approved'
+        DISBURSED = 'disbursed', 'Disbursed'
+        CANCELLED = 'cancelled', 'Cancelled'
+
+    project = models.ForeignKey('pitches.Project', on_delete=models.CASCADE, related_name='funding_grants')
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='funding_grants')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, help_text="Funding amount in INR")
+    funding_type = models.CharField(max_length=30, choices=FundingType.choices, default=FundingType.CSR_GRANT)
+    purpose = models.TextField(blank=True, help_text="Purpose of grant / funding terms")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PROPOSED)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    disbursed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Funding ₹{self.amount} by {self.organization.name} -> Project #{self.project_id} [{self.get_status_display()}]"
+
