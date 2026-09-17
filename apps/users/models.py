@@ -103,3 +103,49 @@ class User(AbstractUser):
 
     def __str__(self):
         return f"{self.name} ({self.email}) - {self.get_role_display()}"
+
+
+class StudentProfile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='student_profile')
+    university = models.ForeignKey(University, on_delete=models.SET_NULL, null=True, blank=True, related_name='student_profiles')
+    roll_no = models.CharField(max_length=50, blank=True)
+    department = models.CharField(max_length=100, blank=True)
+    year_of_study = models.IntegerField(null=True, blank=True)
+    skills = models.TextField(blank=True, help_text="Comma-separated or technical skills")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"StudentProfile for {self.user.name}"
+
+
+class FacultyProfile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='faculty_profile')
+    university = models.ForeignKey(University, on_delete=models.SET_NULL, null=True, blank=True, related_name='faculty_profiles')
+    designation = models.CharField(max_length=100, blank=True)
+    department = models.CharField(max_length=100, blank=True)
+    specialization = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"FacultyProfile for {self.user.name}"
+
+
+class AuditLog(models.Model):
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='audit_logs')
+    action = models.CharField(max_length=100)
+    entity_type = models.CharField(max_length=100)
+    entity_id = models.CharField(max_length=100, blank=True)
+    old_value = models.JSONField(default=dict, blank=True, null=True)
+    new_value = models.JSONField(default=dict, blank=True, null=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"AuditLog [{self.action}] on {self.entity_type} #{self.entity_id} by {self.actor}"
+

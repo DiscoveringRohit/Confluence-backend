@@ -641,4 +641,103 @@ class ChallengeCollaborator(models.Model):
         return f"{self.user} as {self.get_role_display()} on Issue #{self.issue_id}"
 
 
+class IssueMedia(models.Model):
+    class MediaType(models.TextChoices):
+        IMAGE = 'image', 'Image Photo'
+        VIDEO = 'video', 'Video Evidence'
+        DOCUMENT = 'document', 'Document Report'
+        EVIDENCE = 'evidence', 'Field Test Evidence'
+
+    issue = models.ForeignKey(Issue, on_delete=models.CASCADE, related_name='media_files')
+    file = models.FileField(upload_to='issues/media/', blank=True, null=True)
+    file_url = models.URLField(max_length=500, blank=True)
+    media_type = models.CharField(max_length=20, choices=MediaType.choices, default=MediaType.IMAGE)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='uploaded_issue_media'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"IssueMedia #{self.id} ({self.get_media_type_display()}) for Issue #{self.issue_id}"
+
+
+class IssueDuplicate(models.Model):
+    class Status(models.TextChoices):
+        SUSPECTED = 'suspected', 'Suspected Duplicate'
+        CONFIRMED = 'confirmed', 'Confirmed Duplicate'
+        REJECTED = 'rejected', 'Not Duplicate'
+
+    issue = models.ForeignKey(Issue, on_delete=models.CASCADE, related_name='duplicate_sources')
+    duplicate_issue = models.ForeignKey(Issue, on_delete=models.CASCADE, related_name='duplicate_targets')
+    detection_method = models.CharField(max_length=50, default='AI_SIMILARITY')
+    confidence_score = models.FloatField(default=0.0)
+    confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='confirmed_duplicates'
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.SUSPECTED)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('issue', 'duplicate_issue')
+
+    def __str__(self):
+        return f"IssueDuplicate: #{self.issue_id} -> #{self.duplicate_issue_id} ({self.get_status_display()})"
+
+
+class Deployment(models.Model):
+    class Status(models.TextChoices):
+        PLANNED = 'planned', 'Deployment Planned'
+        IN_PROGRESS = 'in_progress', 'Field Deployment Active'
+        COMPLETED = 'completed', 'Deployment Completed'
+        FAILED = 'failed', 'Deployment Failed'
+
+    project = models.ForeignKey('pitches.Project', on_delete=models.CASCADE, related_name='deployments')
+    deployment_location = models.CharField(max_length=255)
+    deployment_date = models.DateField(null=True, blank=True)
+    version_deployed = models.CharField(max_length=50, default='v1.0')
+    deployment_status = models.CharField(max_length=20, choices=Status.choices, default=Status.IN_PROGRESS)
+    authority = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='approved_deployments'
+    )
+    evidence = models.TextField(blank=True, help_text="Links to test reports, photo/video evidence, telemetry")
+    impact_metrics = models.JSONField(default=dict, blank=True, help_text="Measured outcome metrics e.g. beneficiaries, efficiency score")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Deployment #{self.id} for Project #{self.project_id} [{self.get_deployment_status_display()}]"
+
+
+class Resolution(models.Model):
+    issue = models.OneToOneField(Issue, on_delete=models.CASCADE, related_name='resolution_record')
+    project = models.ForeignKey('pitches.Project', on_delete=models.SET_NULL, null=True, blank=True, related_name='resolutions')
+    resolution_summary = models.TextField(help_text="Summary of how the societal challenge was solved")
+    outcome = models.TextField(blank=True, help_text="Final field outcome and measurable social impact")
+    resolved_at = models.DateTimeField(auto_now_add=True)
+    verified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='verified_resolutions'
+    )
+    evidence = models.TextField(blank=True, help_text="Verification links, documents or test readings")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Resolution for Issue #{self.issue_id} (Resolved {self.resolved_at.strftime('%Y-%m-%d')})"
+
+
+
 

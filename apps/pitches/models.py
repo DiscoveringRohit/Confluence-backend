@@ -45,6 +45,14 @@ class Pitch(models.Model):
         related_name='team_pitches',
         help_text="Student collaborators on this pitch"
     )
+    team_entity = models.ForeignKey(
+        'SolutionTeam',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='pitches',
+        help_text="Associated SolutionTeam model instance"
+    )
 
     # DUAL-PACKAGE MODEL
     public_summary = models.TextField(
@@ -677,5 +685,85 @@ class Certificate(models.Model):
 
     def __str__(self):
         return f"Certificate {self.certificate_id}: {self.recipient.name} ({self.get_role_display()})"
+
+
+class SolutionTeam(models.Model):
+    name = models.CharField(max_length=255)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='created_solution_teams'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"SolutionTeam: {self.name} (by {self.created_by.name if hasattr(self.created_by, 'name') else self.created_by.email})"
+
+
+class ProjectMember(models.Model):
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='project_members')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='assigned_project_memberships')
+    role = models.CharField(max_length=50, default='Developer')
+    joined_at = models.DateTimeField(auto_now_add=True)
+    left_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ('project', 'user')
+
+    def __str__(self):
+        return f"ProjectMember: {self.user.name if hasattr(self.user, 'name') else self.user.email} ({self.role}) on Project #{self.project_id}"
+
+
+class ProjectDeliverable(models.Model):
+    class DeliverableType(models.TextChoices):
+        CODE = 'code', 'Source Code / Repository'
+        HARDWARE = 'hardware', 'Hardware Design & Schematics'
+        DOCUMENTATION = 'documentation', 'Technical Specification & Whitepaper'
+        REPORT = 'report', 'Testing Report & Field Outcome'
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='deliverables')
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    deliverable_type = models.CharField(max_length=30, choices=DeliverableType.choices, default=DeliverableType.DOCUMENTATION)
+    file = models.FileField(upload_to='projects/deliverables/', blank=True, null=True)
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='submitted_deliverables'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Deliverable: {self.title} for Project #{self.project_id}"
+
+
+class MentorAssignment(models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = 'active', 'Active Mentorship'
+        COMPLETED = 'completed', 'Mentorship Completed'
+        RELEASED = 'released', 'Released'
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='mentor_assignments')
+    mentor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='faculty_mentor_assignments'
+    )
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assignments_created'
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"MentorAssignment: {self.mentor.name if hasattr(self.mentor, 'name') else self.mentor.email} -> Project #{self.project_id} [{self.get_status_display()}]"
+
 
 
