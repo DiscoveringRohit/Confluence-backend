@@ -211,9 +211,9 @@ class IssueModerationView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
-        allowed_roles = {'gov_admin', 'university_coordinator', 'faculty_mentor', 'admin'}
+        allowed_roles = {'gov_admin', 'university_coordinator', 'admin'}
         if getattr(request.user, 'role', None) not in allowed_roles and not request.user.is_staff and not request.user.is_superuser:
-            raise PermissionDenied("Only university coordinators, mentors, government moderators, or platform staff can moderate issues.")
+            raise PermissionDenied("Only university coordinators, government moderators, or platform administrators can moderate issues.")
 
         issue = get_issue_by_pk_or_public_id(pk)
         if not issue:
@@ -274,9 +274,9 @@ class AdoptIssueView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
-        allowed_roles = {'university_coordinator', 'faculty_mentor', 'gov_admin', 'admin'}
+        allowed_roles = {'university_coordinator', 'gov_admin', 'admin'}
         if getattr(request.user, 'role', None) not in allowed_roles and not request.user.is_staff and not request.user.is_superuser:
-            raise PermissionDenied("Only university coordinators or faculty mentors can adopt issues.")
+            raise PermissionDenied("Only university coordinators or administrators can adopt issues.")
 
         issue = get_issue_by_pk_or_public_id(pk)
         if not issue:
@@ -294,12 +294,10 @@ class AdoptIssueView(APIView):
 
         university = getattr(request.user, 'university', None)
         if not university:
-            from apps.users.models import University
-            university = University.objects.first()
-            if not university:
-                university = University.objects.create(name="Jharkhand Technical University", district="Ranchi")
-            request.user.university = university
-            request.user.save(update_fields=['university'])
+            return Response(
+                {'error': 'User must have an active university affiliation to adopt an issue.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         if hasattr(issue, 'adoption'):
             return Response({'error': 'Issue is already adopted.'}, status=status.HTTP_400_BAD_REQUEST)

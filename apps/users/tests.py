@@ -41,3 +41,43 @@ class UserAuthTestCase(TestCase):
         res = self.client.get("/api/auth/profile/")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data['name'], "Citizen Test")
+
+    def test_privileged_roles_cannot_self_register(self):
+        privileged_roles = ["gov_admin", "university_coordinator", "faculty_mentor", "industry_partner"]
+        for role in privileged_roles:
+            res = self.client.post("/api/auth/register/", {
+                "email": f"attacker_{role}@example.com",
+                "password": "Password123",
+                "name": "Attacker",
+                "role": role,
+                "university": self.uni.id,
+                "organization": self.org.id
+            })
+            self.assertEqual(res.status_code, 400, f"Role {role} should not be allowed to self-register")
+            self.assertIn("role", res.data)
+
+    def test_student_registration_requires_university(self):
+        res = self.client.post("/api/auth/register/", {
+            "email": "student_nouni@example.com",
+            "password": "Password123",
+            "name": "Student Without Uni",
+            "role": "student"
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("university", res.data)
+
+    def test_citizen_registration_clears_affiliations(self):
+        res = self.client.post("/api/auth/register/", {
+            "email": "citizen_valid@jharkhand.in",
+            "password": "Password123",
+            "name": "Citizen User",
+            "role": "citizen",
+            "university": self.uni.id,
+            "organization": self.org.id
+        })
+        self.assertEqual(res.status_code, 201)
+        user = User.objects.get(email="citizen_valid@jharkhand.in")
+        self.assertEqual(user.role, User.Role.CITIZEN)
+        self.assertIsNone(user.university)
+        self.assertIsNone(user.organization)
+

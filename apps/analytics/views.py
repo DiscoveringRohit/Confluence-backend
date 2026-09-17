@@ -9,27 +9,31 @@ from apps.pitches.models import Pitch, ProjectLifecycle, Project, Certificate
 from apps.engagements.models import IndustryEngagement
 from apps.users.models import University, Organization, User
 
-class GovAnalyticsSummaryView(APIView):
-    """
-    Returns aggregate statistics for government administrators,
-    institutional leaders, and the public dashboard summary.
-    Excludes all confidential and raw pitch details.
-    """
-    permission_classes = [permissions.AllowAny]
-
-    def get(self, request):
-        if request.user.is_authenticated and request.user.role == 'student':
-            raise PermissionDenied("Students are not permitted to access Government Analytics.")
-
+class AnalyticsBaseHelper:
+    @staticmethod
+    def get_lifecycle_metrics():
+        # Consistent lifecycle status counting (M-02)
         total_issues = Issue.objects.count()
-        validated_issues = Issue.objects.filter(status__in=['validated', 'adopted', 'assigned', 'resolved']).count()
-        adopted_issues = Issue.objects.filter(status__in=['adopted', 'assigned', 'resolved']).count()
-        assigned_issues = Issue.objects.filter(status__in=['assigned', 'resolved']).count()
-        resolved_issues = Issue.objects.filter(status='resolved').count()
+        validated_issues = Issue.objects.filter(
+            status__in=['validated', 'adopted', 'assigned', 'awaiting_verification', 'verified', 'resolved', 'closed']
+        ).count()
+        adopted_issues = Issue.objects.filter(
+            status__in=['adopted', 'assigned', 'awaiting_verification', 'verified', 'resolved', 'closed']
+        ).count()
+        assigned_issues = Issue.objects.filter(
+            status__in=['assigned', 'awaiting_verification', 'verified', 'resolved', 'closed']
+        ).count()
+        # All completed/terminal resolved states
+        resolved_issues = Issue.objects.filter(
+            status__in=['resolved', 'verified', 'closed']
+        ).count()
+        awaiting_verification = Issue.objects.filter(
+            status=Issue.Status.AWAITING_VERIFICATION
+        ).count()
         escalated_issues = Issue.objects.filter(is_escalated=True).count()
 
         # Domain/Category distribution
-        category_counts = (
+        category_counts = list(
             Issue.objects
             .values('category')
             .annotate(count=Count('id'))
@@ -37,7 +41,7 @@ class GovAnalyticsSummaryView(APIView):
         )
 
         # District-wise distribution
-        district_counts = (
+        district_counts = list(
             Issue.objects
             .values('district')
             .annotate(count=Count('id'))
@@ -58,22 +62,69 @@ class GovAnalyticsSummaryView(APIView):
         active_engagements = IndustryEngagement.objects.filter(status__in=['accepted', 'active', 'completed']).count()
 
         # Field Deployment & Citizen confirmation
-        field_deployed = Project.objects.filter(status__in=[Project.Status.DEPLOYED, Project.Status.VERIFIED]).count() or ProjectLifecycle.objects.filter(outcome_status='deployed').count()
-        citizen_confirmed_resolutions = Issue.objects.filter(citizen_verified_resolved=True).count()
+        field_deployed = Project.objects.filter(
+            status__in=[
+                Project.Status.DEPLOYED,
+                Project.Status.AWAITING_CITIZEN_VERIFICATION,
+                Project.Status.VERIFIED,
+                Project.Status.CLOSED
+            ]
+        ).count()
+        citizen_confirmed_resolutions = Issue.objects.filter(
+            Q(citizen_verified_resolved=True) | Q(status__in=['verified', 'resolved', 'closed'])
+        ).count()
 
         # Real Project Lifecycle model metrics (Issue 32, 33, 54)
         total_projects = Project.objects.count()
         planning_projects = Project.objects.filter(status=Project.Status.PLANNING).count()
         prototype_projects = Project.objects.filter(status=Project.Status.PROTOTYPE).count()
         pilot_projects = Project.objects.filter(status=Project.Status.PILOT).count()
-        verified_projects = Project.objects.filter(status=Project.Status.VERIFIED).count()
+        deployed_projects = Project.objects.filter(status=Project.Status.DEPLOYED).count()
+        verified_projects = Project.objects.filter(
+            status__in=[Project.Status.VERIFIED, Project.Status.CLOSED]
+        ).count()
         total_certificates = Certificate.objects.filter(is_revoked=False).count()
 
-        # Institutional Track Record calculations
+        return {
+            'overview': {
+                'total_issues_reported': total_issues,
+                'validated_issues': validated_issues,
+                'adopted_issues': adopted_issues,
+                'assigned_solutions': assigned_issues,
+                'resolved_issues': resolved_issues,
+                'awaiting_verification_issues': awaiting_verification,
+                'escalated_unadopted': escalated_issues,
+                'total_universities': total_universities,
+                'active_participating_universities': active_universities,
+                'total_pitches_submitted': total_pitches,
+                'selected_solutions': selected_pitches,
+                'collaborative_merged_teams': merged_pitches,
+                'total_projects': total_projects,
+                'projects_planning': planning_projects,
+                'projects_prototype': prototype_projects,
+                'projects_pilot': pilot_projects,
+                'projects_deployed': deployed_projects,
+                'projects_verified': verified_projects,
+                'verified_outcome_certificates': total_certificates,
+                'industry_partners': total_industry_partners,
+                'active_industry_partnerships': active_engagements,
+                'field_deployments': field_deployed,
+                'citizen_confirmed_resolutions': citizen_confirmed_resolutions,
+                'is_real_time_aggregate': True,
+            },
+            'categories': category_counts,
+            'districts': district_counts,
+        }
+
+    @staticmethod
+    def get_institutional_records():
         university_records = []
         for u in University.objects.all():
             adopted_cnt = u.adopted_issues.count()
-            resolved_cnt = Issue.objects.filter(adoption__university=u, status='resolved').count()
+            resolved_cnt = Issue.objects.filter(
+                adoption__university=u,
+                status__in=['resolved', 'verified', 'closed']
+            ).count()
             projects_cnt = u.projects.count() if hasattr(u, 'projects') else Pitch.objects.filter(university=u, status__in=['selected', 'merged']).count()
             rate = round((resolved_cnt / adopted_cnt) * 100, 1) if adopted_cnt > 0 else 100.0
             university_records.append({
@@ -98,36 +149,62 @@ class GovAnalyticsSummaryView(APIView):
                 'total_proposals': org.engagements.count(),
             })
 
-        return Response({
-            'overview': {
-                'total_issues_reported': total_issues,
-                'validated_issues': validated_issues,
-                'adopted_issues': adopted_issues,
-                'assigned_solutions': assigned_issues,
-                'resolved_issues': resolved_issues,
-                'escalated_unadopted': escalated_issues,
-                'total_universities': total_universities,
-                'active_participating_universities': active_universities,
-                'total_pitches_submitted': total_pitches,
-                'selected_solutions': selected_pitches,
-                'collaborative_merged_teams': merged_pitches,
-                'total_projects': total_projects,
-                'projects_planning': planning_projects,
-                'projects_prototype': prototype_projects,
-                'projects_pilot': pilot_projects,
-                'projects_verified': verified_projects,
-                'verified_outcome_certificates': total_certificates,
-                'industry_partners': total_industry_partners,
-                'active_industry_partnerships': active_engagements,
-                'field_deployments': field_deployed,
-                'citizen_confirmed_resolutions': citizen_confirmed_resolutions,
-                'is_real_time_aggregate': True,
-            },
-            'categories': list(category_counts),
-            'districts': list(district_counts),
-            'institutional_track_record': {
-                'universities': university_records,
-                'industry_partners': industry_records,
-            },
-        })
+        return {
+            'universities': university_records,
+            'industry_partners': industry_records,
+        }
+
+
+class GovAnalyticsSummaryView(APIView):
+    """
+    Analytics summary endpoint (M-02).
+    - Public / Unauthenticated callers: Receive public aggregate metrics only.
+    - Institutional callers (Gov admin, Coordinator, Mentor, Industry, Staff): Receive full institutional records.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        user = request.user
+        data = AnalyticsBaseHelper.get_lifecycle_metrics()
+
+        # Institutional track record is restricted to authenticated institutional stakeholders
+        is_institutional = (
+            user.is_authenticated and (
+                user.is_staff or
+                getattr(user, 'role', None) in ['gov_admin', 'university_coordinator', 'faculty_mentor', 'industry_partner', 'admin']
+            )
+        )
+
+        if is_institutional:
+            data['is_public'] = False
+            data['is_institutional'] = True
+            data['institutional_track_record'] = AnalyticsBaseHelper.get_institutional_records()
+        else:
+            data['is_public'] = True
+            data['is_institutional'] = False
+            data['institutional_track_record'] = {
+                'universities': [],
+                'industry_partners': []
+            }
+
+        return Response(data)
+
+
+class InstitutionalAnalyticsView(APIView):
+    """
+    Dedicated authenticated institutional analytics endpoint (M-02).
+    Restricted to institutional stakeholders and administrators.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        allowed_roles = ['gov_admin', 'university_coordinator', 'faculty_mentor', 'industry_partner', 'admin']
+        if not (user.is_staff or getattr(user, 'role', None) in allowed_roles):
+            raise PermissionDenied("Access to institutional analytics is restricted to university, industry, and government leaders.")
+
+        data = AnalyticsBaseHelper.get_lifecycle_metrics()
+        data['institutional_track_record'] = AnalyticsBaseHelper.get_institutional_records()
+        return Response(data)
+
 

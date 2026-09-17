@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from apps.users.models import University
 
 class Issue(models.Model):
@@ -198,6 +199,38 @@ class Issue(models.Model):
 
     def transition_status(self, new_status, actor=None, reason=''):
         prev_status = self.status
+        if prev_status == new_status:
+            return None
+
+        VALID_TRANSITIONS = {
+            self.Status.SUBMITTED: [self.Status.VALIDATING, self.Status.VALIDATED, self.Status.REJECTED, self.Status.DUPLICATE],
+            self.Status.VALIDATING: [self.Status.VALIDATED, self.Status.REJECTED, self.Status.DUPLICATE],
+            self.Status.VALIDATED: [self.Status.ADOPTED, self.Status.AVAILABLE_FOR_ADOPTION, self.Status.ADOPTION_REQUESTED, self.Status.REJECTED],
+            self.Status.AVAILABLE_FOR_ADOPTION: [self.Status.ADOPTED, self.Status.ADOPTION_REQUESTED, self.Status.REJECTED],
+            self.Status.ADOPTION_REQUESTED: [self.Status.ADOPTED, self.Status.AVAILABLE_FOR_ADOPTION, self.Status.REJECTED],
+            self.Status.ADOPTED: [self.Status.OPEN, self.Status.UNDER_REVIEW, self.Status.SOLUTION_SELECTED, self.Status.ASSIGNED, self.Status.PROJECT, self.Status.PILOT, self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION],
+            self.Status.OPEN: [self.Status.UNDER_REVIEW, self.Status.SOLUTION_SELECTED, self.Status.ASSIGNED, self.Status.PROJECT],
+            self.Status.UNDER_REVIEW: [self.Status.SOLUTION_SELECTED, self.Status.ASSIGNED, self.Status.OPEN, self.Status.PROJECT],
+            self.Status.SOLUTION_SELECTED: [self.Status.ASSIGNED, self.Status.PROJECT, self.Status.PILOT, self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION],
+            self.Status.ASSIGNED: [self.Status.PROJECT, self.Status.PROTOTYPE, self.Status.PILOT, self.Status.DEPLOYED, self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION],
+            self.Status.PROJECT: [self.Status.PROTOTYPE, self.Status.PILOT, self.Status.DEPLOYED, self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION],
+            self.Status.PROTOTYPE: [self.Status.PILOT, self.Status.DEPLOYED, self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION],
+            self.Status.PILOT: [self.Status.DEPLOYED, self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION],
+            self.Status.DEPLOYED: [self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION],
+            self.Status.AWAITING_VERIFICATION: [self.Status.VERIFIED, self.Status.RESOLVED, self.Status.FAILED, self.Status.REOPENED],
+            self.Status.AWAITING_CITIZEN_VERIFICATION: [self.Status.VERIFIED, self.Status.RESOLVED, self.Status.FAILED, self.Status.REOPENED],
+            self.Status.VERIFIED: [self.Status.RESOLVED],
+            self.Status.REOPENED: [self.Status.ADOPTED, self.Status.ASSIGNED, self.Status.PROJECT, self.Status.PILOT],
+            self.Status.FAILED: [self.Status.REOPENED, self.Status.ADOPTED],
+        }
+
+        if prev_status in [self.Status.REJECTED, self.Status.RESOLVED]:
+            raise ValidationError(f"Cannot transition issue from terminal state '{prev_status}'.")
+
+        allowed = VALID_TRANSITIONS.get(prev_status, [])
+        if new_status not in allowed:
+            raise ValidationError(f"Invalid transition for issue from '{prev_status}' to '{new_status}'. Allowed transitions: {allowed}")
+
         self.status = new_status
         self.save(update_fields=['status', 'updated_at'])
         history = IssueStatusHistory.objects.create(

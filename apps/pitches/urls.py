@@ -26,6 +26,7 @@ from .views import (
     ProjectIndustryEngagementListView,
     GenerateCertificateView,
     VerifyCertificateView,
+    UserCertificateListView,
 )
 
 urlpatterns = [
@@ -52,6 +53,8 @@ urlpatterns = [
     path('projects/<str:project_id>/express-interest/', ProjectExpressInterestView.as_view(), name='project_express_interest'),
     path('projects/<str:project_id>/engagements/', ProjectIndustryEngagementListView.as_view(), name='project_engagements'),
     # Issue 55: Verified Outcome Certificates
+    path('certificates/', UserCertificateListView.as_view(), name='user_certificates'),
+    path('certificates/mine/', UserCertificateListView.as_view(), name='user_certificates_mine'),
     path('projects/<str:project_id>/certificates/generate/', GenerateCertificateView.as_view(), name='project_generate_certificates'),
     path('certificates/<str:certificate_id>/verify/', VerifyCertificateView.as_view(), name='verify_certificate'),
     # Solution Evaluations, Feedback & Lifecycle
