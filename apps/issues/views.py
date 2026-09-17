@@ -3,6 +3,7 @@ from django.db import models
 from django.utils import timezone
 from django.conf import settings
 from rest_framework import generics, permissions, status, filters
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -107,6 +108,7 @@ def get_issue_by_pk_or_public_id(pk):
 class IssueListCreateView(generics.ListCreateAPIView):
     serializer_class = IssueSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     filter_backends = [filters.SearchFilter]
     search_fields = ['public_id', 'title', 'description', 'district', 'address']
     throttle_scope = 'issue_create'
@@ -168,6 +170,7 @@ class IssueDetailView(generics.RetrieveUpdateAPIView):
     queryset = Issue.objects.select_related('submitted_by', 'adoption', 'adoption__university').prefetch_related('status_history').all()
     serializer_class = IssueSerializer
     permission_classes = [CanUpdateIssue]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_object(self):
         pk = self.kwargs.get('pk')
@@ -336,12 +339,21 @@ class NominateIssueView(APIView):
         if not issue:
             return Response({'error': 'Issue not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        if issue.status != Issue.Status.VALIDATED:
-            return Response({'error': 'Only unadopted, validated issues can be nominated.'}, status=status.HTTP_400_BAD_REQUEST)
-
         university = request.user.university
         if not university:
             return Response({'error': 'Student must be affiliated with a university.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if already adopted by student's university
+        if hasattr(issue, 'adoption') and issue.adoption.university_id == university.id and getattr(issue.adoption, 'status', None) == 'approved':
+            return Response({'error': 'This challenge is already adopted by your university. Students can write pitches directly.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Disallow if already adopted by another university
+        if hasattr(issue, 'adoption') and getattr(issue.adoption, 'status', None) == 'approved' and issue.adoption.university_id != university.id:
+            return Response({'error': f'This challenge has already been adopted by {issue.adoption.university.name}.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Disallow terminal or closed states
+        if issue.status in [Issue.Status.RESOLVED, Issue.Status.REJECTED, Issue.Status.DUPLICATE]:
+            return Response({'error': f'Cannot nominate an issue with status {issue.status}.'}, status=status.HTTP_400_BAD_REQUEST)
 
         rationale = request.data.get('rationale', '')
         nomination, created = StudentNomination.objects.get_or_create(
@@ -420,13 +432,23 @@ class ReviewNominationView(APIView):
 
 
 class UniversityNominationsListView(generics.ListAPIView):
-    """List nominations for the coordinator's university."""
+    """
+    List nominations.
+    - If user is a student: returns nominations submitted by the student.
+    - If user is coordinator/mentor: returns pending nominations received by their university.
+    """
     serializer_class = StudentNominationSerializer
-    permission_classes = [permissions.IsAuthenticated, IsUniversityCoordinator]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        user = self.request.user
+        if getattr(user, 'role', None) == 'student':
+            return StudentNomination.objects.filter(
+                student=user
+            ).order_by('-created_at')
+
         return StudentNomination.objects.filter(
-            university=self.request.user.university,
+            university=user.university,
             status=StudentNomination.Status.PENDING
         ).order_by('-created_at')
 
