@@ -61,6 +61,14 @@ class Command(BaseCommand):
         admin_user.set_password(pwd)
         admin_user.save()
 
+        # Master Super Admin
+        superadmin_user, _ = User.objects.get_or_create(
+            email="superadmin@confluence.gov.in",
+            defaults={"name": "Master Super Admin", "role": User.Role.ADMIN, "is_staff": True, "is_superuser": True}
+        )
+        superadmin_user.set_password(pwd)
+        superadmin_user.save()
+
         # Citizens
         citizen1, _ = User.objects.get_or_create(
             email="citizen@jharkhand.in",

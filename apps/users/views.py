@@ -56,10 +56,10 @@ class OrganizationListView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
 
-class UserListView(generics.ListAPIView):
+class UserListView(generics.ListCreateAPIView):
     """
     Restricted user directory (M-01).
-    - Admins and Government Administrators: Can query all users across the platform.
+    - Admins and Government Administrators: Can query and create all users across the platform.
     - University Coordinators: Can query users affiliated with their own university.
     - External/Student/Citizen accounts: Denied access to prevent user enumeration and data scraping.
     """
@@ -67,13 +67,14 @@ class UserListView(generics.ListAPIView):
 
     def get_serializer_class(self):
         user = self.request.user
-        if user.is_staff or getattr(user, 'role', None) == User.Role.GOV_ADMIN:
+        is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in [User.Role.GOV_ADMIN, User.Role.ADMIN, 'admin']
+        if is_admin:
             return UserProfileSerializer
         return DirectoryUserSerializer
 
     def get_queryset(self):
         user = self.request.user
-        is_admin = user.is_staff or getattr(user, 'role', None) == User.Role.GOV_ADMIN
+        is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in [User.Role.GOV_ADMIN, User.Role.ADMIN, 'admin']
         is_coord = getattr(user, 'role', None) == User.Role.UNIVERSITY_COORDINATOR
 
         if not (is_admin or is_coord):
@@ -92,6 +93,20 @@ class UserListView(generics.ListAPIView):
         if university_id and is_admin:
             qs = qs.filter(university_id=university_id)
         return qs
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in [User.Role.GOV_ADMIN, User.Role.ADMIN, 'admin']
+        if not is_admin:
+            raise PermissionDenied("Only administrators can create users directly.")
+        password = self.request.data.get('password', 'Password@123')
+        instance = serializer.save()
+        instance.set_password(password)
+        if self.request.data.get('is_superuser'):
+            instance.is_superuser = True
+        if self.request.data.get('is_staff'):
+            instance.is_staff = True
+        instance.save()
 
 
 class UniversityStudentsListView(generics.ListAPIView):
@@ -165,12 +180,12 @@ class UniversityCoordinatorsListView(generics.ListAPIView):
         ).order_by('name')
 
 
-class UserDetailView(generics.RetrieveUpdateAPIView):
+class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
-    Retrieve or update a user account by primary key (M-06).
-    - Users can view and update their own profile.
-    - Staff / Gov Admins can view any user profile.
-    - University Coordinators can view profiles of users affiliated with their university.
+    Retrieve, update, or delete a user account by primary key (M-06).
+    - Platform Admins / Superusers: Unrestricted authority to inspect, update any attribute, or delete any account.
+    - Users: Can view and update their own profile.
+    - University Coordinators: Can view profiles of users affiliated with their university.
     """
     permission_classes = [permissions.IsAuthenticated]
     queryset = User.objects.select_related('university', 'organization').all()
@@ -178,14 +193,16 @@ class UserDetailView(generics.RetrieveUpdateAPIView):
     def get_serializer_class(self):
         user = self.request.user
         target_user_id = self.kwargs.get('pk')
-        if user.is_staff or getattr(user, 'role', None) == User.Role.GOV_ADMIN or user.id == int(target_user_id):
+        is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in [User.Role.GOV_ADMIN, User.Role.ADMIN, 'admin']
+        if is_admin or user.id == int(target_user_id):
             return UserProfileSerializer
         return DirectoryUserSerializer
 
     def check_object_permissions(self, request, obj):
         super().check_object_permissions(request, obj)
         user = request.user
-        if user.is_staff or getattr(user, 'role', None) == User.Role.GOV_ADMIN:
+        is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in [User.Role.GOV_ADMIN, User.Role.ADMIN, 'admin']
+        if is_admin:
             return
         if user.id == obj.id:
             return
@@ -193,5 +210,36 @@ class UserDetailView(generics.RetrieveUpdateAPIView):
             if request.method in permissions.SAFE_METHODS:
                 return
         raise PermissionDenied("You do not have permission to view or modify this user account.")
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in [User.Role.GOV_ADMIN, User.Role.ADMIN, 'admin']
+        instance = serializer.save()
+        if is_admin:
+            data = self.request.data
+            if 'password' in data and data['password']:
+                instance.set_password(data['password'])
+            if 'is_superuser' in data:
+                instance.is_superuser = bool(data['is_superuser'])
+            if 'is_staff' in data:
+                instance.is_staff = bool(data['is_staff'])
+            if 'is_active' in data:
+                instance.is_active = bool(data['is_active'])
+            instance.save()
+
+
+class UniversityDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or delete an accredited university."""
+    queryset = University.objects.all()
+    serializer_class = UniversitySerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+
+
+class OrganizationDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or delete an industry / CSR organization."""
+    queryset = Organization.objects.all()
+    serializer_class = OrganizationSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+
 
 
