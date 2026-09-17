@@ -71,6 +71,7 @@ class User(AbstractUser):
         UNIVERSITY_COORDINATOR = 'university_coordinator', 'University Coordinator'
         INDUSTRY_PARTNER = 'industry_partner', 'Industry Partner'
         GOV_ADMIN = 'gov_admin', 'Government Admin'
+        ADMIN = 'admin', 'Super Admin / Master Admin'
 
     username = None  # Use email as unique identifier
     email = models.EmailField(unique=True)

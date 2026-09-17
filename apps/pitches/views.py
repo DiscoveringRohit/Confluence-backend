@@ -109,7 +109,7 @@ class PitchListCreateView(generics.ListCreateAPIView):
         serializer.save()
 
 
-class PitchDetailView(generics.RetrieveUpdateAPIView):
+class PitchDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Pitch.objects.select_related('issue', 'university', 'assigned_mentor').prefetch_related('student_team', 'community_feedback').all()
     serializer_class = PitchSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
@@ -126,12 +126,24 @@ class PitchDetailView(generics.RetrieveUpdateAPIView):
         self.check_object_permissions(self.request, obj)
         return obj
 
+    def check_object_permissions(self, request, obj):
+        super().check_object_permissions(request, obj)
+        user = request.user
+        if request.method in permissions.SAFE_METHODS:
+            return
+        is_owner = SolutionTeamMember.objects.filter(pitch=obj, student=user, role=SolutionTeamMember.Role.OWNER).exists() or obj.student_team.filter(id=user.id).exists()
+        is_coord = (getattr(user, 'role', None) == 'university_coordinator' and user.university_id == obj.university_id)
+        is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in ['admin', 'gov_admin']
+        if not (is_owner or is_coord or is_admin):
+            raise PermissionDenied("You do not have permission to modify or delete this pitch.")
+
     def perform_update(self, serializer):
         user = self.request.user
         pitch = self.get_object()
         is_owner = SolutionTeamMember.objects.filter(pitch=pitch, student=user, role=SolutionTeamMember.Role.OWNER).exists() or pitch.student_team.filter(id=user.id).exists()
         is_coord = (getattr(user, 'role', None) == 'university_coordinator' and user.university_id == pitch.university_id)
-        if not (is_owner or is_coord or user.is_staff):
+        is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in ['admin', 'gov_admin']
+        if not (is_owner or is_coord or is_admin):
             raise PermissionDenied("You do not have permission to edit this pitch.")
 
         prev_repo = pitch.repository_url

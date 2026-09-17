@@ -26,7 +26,7 @@ class CanUpdateIssue(permissions.BasePermission):
         if not user or not user.is_authenticated:
             return False
 
-        if user.is_staff or getattr(user, 'role', None) == 'gov_admin':
+        if user.is_staff or user.is_superuser or getattr(user, 'role', None) in ['gov_admin', 'admin']:
             return True
 
         # Citizen (creator) can edit their own challenge while in SUBMITTED or REOPENED state (Issue 47)

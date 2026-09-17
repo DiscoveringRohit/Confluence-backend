@@ -212,8 +212,10 @@ class PitchSerializer(serializers.ModelSerializer):
         is_uni_coordinator = user and user.is_authenticated and getattr(user, 'role', None) in ['university_coordinator', 'faculty_mentor'] and user.university_id == instance.university_id
         is_invited_industry = user and user.is_authenticated and getattr(user, 'role', None) == 'industry_partner' and instance.issue.industry_engagements.filter(industry_org=user.organization, status__in=['active', 'accepted']).exists()
 
+        is_admin = user and user.is_authenticated and (user.is_staff or user.is_superuser or getattr(user, 'role', None) in ['admin', 'gov_admin'])
+
         # 1. Confidential Package Access
-        allowed_confidential = is_own_team or is_assigned_mentor or is_uni_coordinator or is_invited_industry
+        allowed_confidential = is_own_team or is_assigned_mentor or is_uni_coordinator or is_invited_industry or is_admin
         if not allowed_confidential:
             data['confidential_package'] = "[PROTECTED — Visible only to submitting team, university review board, and assigned mentor]"
 

@@ -5,7 +5,9 @@ from .views import (
     CustomTokenObtainPairView,
     UserProfileView,
     UniversityListView,
+    UniversityDetailView,
     OrganizationListView,
+    OrganizationDetailView,
     UserListView,
     UniversityStudentsListView,
     UniversityMentorsListView,
@@ -19,17 +21,21 @@ auth_urlpatterns = [
     path('token/refresh/', TokenRefreshView.as_view(), name='auth_token_refresh'),
     path('profile/', UserProfileView.as_view(), name='auth_profile'),
     path('universities/', UniversityListView.as_view(), name='auth_universities'),
+    path('universities/<int:pk>/', UniversityDetailView.as_view(), name='auth_university_detail'),
     path('organizations/', OrganizationListView.as_view(), name='auth_organizations'),
+    path('organizations/<int:pk>/', OrganizationDetailView.as_view(), name='auth_organization_detail'),
 ]
 
 user_urlpatterns = [
     path('', UserListView.as_view(), name='user_list'),
     path('<int:pk>/', UserDetailView.as_view(), name='user_detail'),
     path('universities/', UniversityListView.as_view(), name='university_list'),
+    path('universities/<int:pk>/', UniversityDetailView.as_view(), name='university_detail'),
     path('universities/<int:university_id>/students/', UniversityStudentsListView.as_view(), name='university_students'),
     path('universities/<int:university_id>/mentors/', UniversityMentorsListView.as_view(), name='university_mentors'),
     path('universities/<int:university_id>/coordinators/', UniversityCoordinatorsListView.as_view(), name='university_coordinators'),
     path('organizations/', OrganizationListView.as_view(), name='organization_list'),
+    path('organizations/<int:pk>/', OrganizationDetailView.as_view(), name='organization_detail'),
 ]
 
 urlpatterns = auth_urlpatterns + user_urlpatterns

@@ -72,7 +72,32 @@ def run_ai_triage(issue):
     except Exception:
         pass
 
-    # Heuristic fallback if AI service is not running
+    # 2. Direct Gemini Multimodal Vision & Triage with Key Rotation
+    try:
+        from .gemini_service import call_gemini_triage
+        photo_path = None
+        if issue.photo and hasattr(issue.photo, 'path'):
+            photo_path = issue.photo.path
+
+        gemini_result = call_gemini_triage(
+            title=issue.title,
+            description=issue.description,
+            district=issue.district,
+            photo_path=photo_path,
+            photo_url=issue.photo_url
+        )
+        if gemini_result:
+            issue.category = gemini_result.get('category', issue.category)
+            issue.ai_confidence = float(gemini_result.get('confidence_score', 0.92))
+            key_used = gemini_result.get('key_used', 'Gemini')
+            notes = gemini_result.get('verification_notes', 'Verified via Gemini Multimodal Vision')
+            issue.ai_triage_notes = f"[Gemini 3.6 Flash | {key_used}] {notes}"
+            issue.save(update_fields=['category', 'ai_confidence', 'ai_triage_notes'])
+            return
+    except Exception as e:
+        logger.warning("Gemini direct triage failed: %s", e)
+
+    # 3. Rule-based heuristic fallback if AI services are unavailable
     desc_lower = (issue.title + " " + issue.description).lower()
     if any(k in desc_lower for k in ['school', 'teacher', 'student', 'book', 'class', 'college']):
         issue.category = Issue.Category.EDUCATION
@@ -166,7 +191,7 @@ class IssueListCreateView(generics.ListCreateAPIView):
         run_ai_triage(issue)
 
 
-class IssueDetailView(generics.RetrieveUpdateAPIView):
+class IssueDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Issue.objects.select_related('submitted_by', 'adoption', 'adoption__university').prefetch_related('status_history').all()
     serializer_class = IssueSerializer
     permission_classes = [CanUpdateIssue]
@@ -189,7 +214,8 @@ class IssueDetailView(generics.RetrieveUpdateAPIView):
         user = self.request.user
         old_status = self.get_object().status
         requested_status = serializer.validated_data.get('status')
-        if requested_status and requested_status != old_status and not (user.is_staff or getattr(user, 'role', None) == 'gov_admin'):
+        is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in ['gov_admin', 'admin']
+        if requested_status and requested_status != old_status and not is_admin:
             raise ValidationError({'status': 'Challenge status cannot be modified via direct update. Use canonical lifecycle workflow endpoints.'})
 
         # Field-level restrictions (Issue 47)
@@ -206,8 +232,69 @@ class IssueDetailView(generics.RetrieveUpdateAPIView):
                 previous_status=old_status,
                 new_status=instance.status,
                 actor=self.request.user,
-                reason='Direct status update'
+                reason=f'Status updated by {user.name or user.email}'
             )
+
+
+class AdminForceAdoptView(APIView):
+    """
+    Omnipotent Admin Endpoint:
+    Force-adopt any challenge to any university with zero restrictions, bypassing normal nominations or waiting periods.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        user = request.user
+        is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in ['admin', 'gov_admin']
+        if not is_admin:
+            raise PermissionDenied("Only administrators can force-adopt challenges.")
+
+        issue = get_issue_by_pk_or_public_id(pk)
+        if not issue:
+            return Response({'error': 'Challenge not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        university_id = request.data.get('university_id')
+        if not university_id:
+            return Response({'error': 'university_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        university = University.objects.filter(id=university_id).first()
+        if not university:
+            return Response({'error': 'University not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        issue.maintaining_university = university
+        issue.save(update_fields=['maintaining_university'])
+
+        adoption, _ = Adoption.objects.update_or_create(
+            issue=issue,
+            defaults={
+                'university': university,
+                'coordinator': user,
+                'status': Adoption.Status.APPROVED,
+                'mode': Adoption.Mode.SELF_ADOPTED,
+            }
+        )
+
+        old_status = issue.status
+        issue.status = Issue.Status.ADOPTED
+        issue.save(update_fields=['status'])
+
+        if old_status != Issue.Status.ADOPTED:
+            IssueStatusHistory.objects.create(
+                issue=issue,
+                previous_status=old_status,
+                new_status=Issue.Status.ADOPTED,
+                actor=user,
+                reason=f'Force-adopted by Administrator to {university.name}'
+            )
+
+        log_activity(
+            issue=issue,
+            actor=user,
+            event_type='force_adopted',
+            description=f'Admin force-adopted challenge to {university.name}'
+        )
+
+        return Response(IssueSerializer(issue, context={'request': request}).data, status=status.HTTP_200_OK)
 
 
 class IssueModerationView(APIView):
