@@ -3,6 +3,7 @@ from django.db import models
 from django.utils import timezone
 from django.conf import settings
 from rest_framework import generics, permissions, status, filters
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -107,6 +108,7 @@ def get_issue_by_pk_or_public_id(pk):
 class IssueListCreateView(generics.ListCreateAPIView):
     serializer_class = IssueSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     filter_backends = [filters.SearchFilter]
     search_fields = ['public_id', 'title', 'description', 'district', 'address']
     throttle_scope = 'issue_create'
@@ -168,6 +170,7 @@ class IssueDetailView(generics.RetrieveUpdateAPIView):
     queryset = Issue.objects.select_related('submitted_by', 'adoption', 'adoption__university').prefetch_related('status_history').all()
     serializer_class = IssueSerializer
     permission_classes = [CanUpdateIssue]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_object(self):
         pk = self.kwargs.get('pk')
