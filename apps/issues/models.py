@@ -208,7 +208,7 @@ class Issue(models.Model):
             self.Status.VALIDATED: [self.Status.ADOPTED, self.Status.AVAILABLE_FOR_ADOPTION, self.Status.ADOPTION_REQUESTED, self.Status.REJECTED],
             self.Status.AVAILABLE_FOR_ADOPTION: [self.Status.ADOPTED, self.Status.ADOPTION_REQUESTED, self.Status.REJECTED],
             self.Status.ADOPTION_REQUESTED: [self.Status.ADOPTED, self.Status.AVAILABLE_FOR_ADOPTION, self.Status.REJECTED],
-            self.Status.ADOPTED: [self.Status.OPEN, self.Status.UNDER_REVIEW, self.Status.SOLUTION_SELECTED, self.Status.ASSIGNED, self.Status.PROJECT, self.Status.PILOT, self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION],
+            self.Status.ADOPTED: [self.Status.OPEN, self.Status.UNDER_REVIEW, self.Status.SOLUTION_SELECTED, self.Status.ASSIGNED, self.Status.PROJECT, self.Status.PILOT, self.Status.DEPLOYED, self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION],
             self.Status.OPEN: [self.Status.UNDER_REVIEW, self.Status.SOLUTION_SELECTED, self.Status.ASSIGNED, self.Status.PROJECT],
             self.Status.UNDER_REVIEW: [self.Status.SOLUTION_SELECTED, self.Status.ASSIGNED, self.Status.OPEN, self.Status.PROJECT],
             self.Status.SOLUTION_SELECTED: [self.Status.ASSIGNED, self.Status.PROJECT, self.Status.PILOT, self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION],
@@ -217,10 +217,10 @@ class Issue(models.Model):
             self.Status.PROTOTYPE: [self.Status.PILOT, self.Status.DEPLOYED, self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION, self.Status.REOPENED, self.Status.RESOLVED],
             self.Status.PILOT: [self.Status.DEPLOYED, self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION, self.Status.REOPENED, self.Status.RESOLVED],
             self.Status.DEPLOYED: [self.Status.AWAITING_VERIFICATION, self.Status.AWAITING_CITIZEN_VERIFICATION, self.Status.REOPENED, self.Status.RESOLVED],
-            self.Status.AWAITING_VERIFICATION: [self.Status.VERIFIED, self.Status.RESOLVED, self.Status.FAILED, self.Status.REOPENED],
-            self.Status.AWAITING_CITIZEN_VERIFICATION: [self.Status.VERIFIED, self.Status.RESOLVED, self.Status.FAILED, self.Status.REOPENED],
+            self.Status.AWAITING_VERIFICATION: [self.Status.VERIFIED, self.Status.RESOLVED, self.Status.FAILED, self.Status.REOPENED, self.Status.DEPLOYED],
+            self.Status.AWAITING_CITIZEN_VERIFICATION: [self.Status.VERIFIED, self.Status.RESOLVED, self.Status.FAILED, self.Status.REOPENED, self.Status.DEPLOYED],
             self.Status.VERIFIED: [self.Status.RESOLVED],
-            self.Status.REOPENED: [self.Status.ADOPTED, self.Status.ASSIGNED, self.Status.PROJECT, self.Status.PILOT, self.Status.RESOLVED],
+            self.Status.REOPENED: [self.Status.ADOPTED, self.Status.ASSIGNED, self.Status.PROJECT, self.Status.PILOT, self.Status.DEPLOYED, self.Status.RESOLVED],
             self.Status.FAILED: [self.Status.REOPENED, self.Status.ADOPTED],
         }
 

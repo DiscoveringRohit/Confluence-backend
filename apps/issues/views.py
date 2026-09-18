@@ -301,9 +301,9 @@ class IssueModerationView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
-        allowed_roles = {'gov_admin', 'university_coordinator', 'admin'}
+        allowed_roles = {'gov_admin', 'admin'}
         if getattr(request.user, 'role', None) not in allowed_roles and not request.user.is_staff and not request.user.is_superuser:
-            raise PermissionDenied("Only university coordinators, government moderators, or platform administrators can moderate issues.")
+            raise PermissionDenied("Only government moderators or platform administrators can moderate issues.")
 
         issue = get_issue_by_pk_or_public_id(pk)
         if not issue:

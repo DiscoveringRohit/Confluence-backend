@@ -160,11 +160,15 @@ class GovAnalyticsSummaryView(APIView):
     Analytics summary endpoint (M-02).
     - Public / Unauthenticated callers: Receive public aggregate metrics only.
     - Institutional callers (Gov admin, Coordinator, Mentor, Industry, Staff): Receive full institutional records.
+    - Students: 403 Forbidden.
     """
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
         user = request.user
+        if user.is_authenticated and getattr(user, 'role', None) == 'student':
+            raise PermissionDenied("Students are not permitted to access Government Analytics.")
+
         data = AnalyticsBaseHelper.get_lifecycle_metrics()
 
         # Institutional track record is restricted to authenticated institutional stakeholders
@@ -206,5 +210,48 @@ class InstitutionalAnalyticsView(APIView):
         data = AnalyticsBaseHelper.get_lifecycle_metrics()
         data['institutional_track_record'] = AnalyticsBaseHelper.get_institutional_records()
         return Response(data)
+
+
+class AuditLogsAnalyticsView(APIView):
+    """
+    Live Administrative Audit Trail and telemetry stream.
+    Queries database AuditLog and ActivityEvent records.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in ['admin', 'gov_admin']
+        if not is_admin:
+            raise PermissionDenied("Only administrators can view the audit stream.")
+
+        from apps.users.models import AuditLog
+        from apps.issues.models import ActivityEvent
+
+        logs = []
+        # 1. Fetch AuditLog records
+        for log in AuditLog.objects.select_related('actor').all()[:50]:
+            logs.append({
+                'id': f"audit-{log.id}",
+                'time': log.created_at.isoformat(),
+                'event': f"[{log.action.upper()}] {log.entity_type} #{log.entity_id} - Actor: {log.actor.name if log.actor else 'System'}",
+                'level': 'AUDIT',
+                'ip': log.ip_address or '127.0.0.1 (API Gateway)',
+            })
+
+        # 2. Fetch ActivityEvents
+        for event in ActivityEvent.objects.select_related('actor', 'issue').all()[:50]:
+            logs.append({
+                'id': f"activity-{event.id}",
+                'time': event.created_at.isoformat(),
+                'event': f"[{event.event_type}] Issue #{event.issue_id} ({event.issue.title[:30]}): {event.description}",
+                'level': 'ACTIVITY',
+                'ip': '127.0.0.1 (Core Gateway)',
+            })
+
+        # Sort by timestamp descending
+        logs.sort(key=lambda x: x['time'], reverse=True)
+
+        return Response(logs[:50])
 
 

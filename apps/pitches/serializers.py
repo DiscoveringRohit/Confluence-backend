@@ -67,7 +67,7 @@ class ProjectLifecycleSerializer(serializers.ModelSerializer):
 from .models import (
     Pitch, CommunityFeedback, ProjectLifecycle, PitchVersionHistory,
     SolutionEvaluation, SolutionTeamMember, ReviewSession, Project, ProjectMilestone,
-    Certificate
+    Certificate, ProjectMember
 )
 from apps.issues.serializers import DiscussionCommentSerializer
 
@@ -85,6 +85,15 @@ class SolutionTeamMemberSerializer(serializers.ModelSerializer):
         if student and getattr(student, 'role', None) != 'student':
             raise serializers.ValidationError({"student": "Team member must be a student."})
         return data
+
+
+class ProjectMemberSerializer(serializers.ModelSerializer):
+    user_details = UserProfileSerializer(source='user', read_only=True)
+
+    class Meta:
+        model = ProjectMember
+        fields = ['id', 'project', 'user', 'user_details', 'role', 'joined_at', 'left_at']
+        read_only_fields = ['id', 'project', 'user_details', 'joined_at']
 
 
 # Specification Section 63 Serializer Alias
@@ -212,7 +221,7 @@ class PitchSerializer(serializers.ModelSerializer):
         is_uni_coordinator = user and user.is_authenticated and getattr(user, 'role', None) in ['university_coordinator', 'faculty_mentor'] and user.university_id == instance.university_id
         is_invited_industry = user and user.is_authenticated and getattr(user, 'role', None) == 'industry_partner' and instance.issue.industry_engagements.filter(industry_org=user.organization, status__in=['active', 'accepted']).exists()
 
-        is_admin = user and user.is_authenticated and (user.is_staff or user.is_superuser or getattr(user, 'role', None) in ['admin', 'gov_admin'])
+        is_admin = user and user.is_authenticated and (user.is_staff or user.is_superuser or getattr(user, 'role', None) in ['admin'])
 
         # 1. Confidential Package Access
         allowed_confidential = is_own_team or is_assigned_mentor or is_uni_coordinator or is_invited_industry or is_admin
@@ -428,6 +437,7 @@ class ProjectMilestoneSerializer(serializers.ModelSerializer):
 class ProjectSerializer(serializers.ModelSerializer):
     mentor_details = UserProfileSerializer(source='mentor', read_only=True)
     team_details = UserProfileSerializer(source='team', many=True, read_only=True)
+    project_members = ProjectMemberSerializer(many=True, read_only=True)
     challenge_details = serializers.SerializerMethodField()
     solution_details = serializers.SerializerMethodField()
     progress_pct = serializers.SerializerMethodField()
@@ -437,7 +447,7 @@ class ProjectSerializer(serializers.ModelSerializer):
         model = Project
         fields = [
             'id', 'public_id', 'solution', 'solution_details', 'challenge', 'challenge_details',
-            'university', 'mentor', 'mentor_details', 'team', 'team_details',
+            'university', 'mentor', 'mentor_details', 'team', 'team_details', 'project_members',
             'title', 'status', 'start_date', 'target_date',
             'deployment_status', 'deployment_evidence', 'outcome',
             'deployed_at', 'progress_pct', 'milestone_counts',
@@ -510,9 +520,10 @@ class ProjectSerializer(serializers.ModelSerializer):
 class ProjectDetailSerializer(ProjectSerializer):
     milestones = ProjectMilestoneSerializer(many=True, read_only=True)
     discussions = DiscussionCommentSerializer(many=True, read_only=True)
+    project_members = ProjectMemberSerializer(many=True, read_only=True)
 
     class Meta(ProjectSerializer.Meta):
-        fields = ProjectSerializer.Meta.fields + ['milestones', 'discussions']
+        fields = ProjectSerializer.Meta.fields + ['milestones', 'discussions', 'project_members']
 
 
 class CertificateSerializer(serializers.ModelSerializer):

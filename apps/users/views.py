@@ -8,6 +8,7 @@ from .serializers import (
     UserRegistrationSerializer,
     UserProfileSerializer,
     DirectoryUserSerializer,
+    AdminUserSerializer,
     UniversitySerializer,
     OrganizationSerializer,
 )
@@ -49,19 +50,32 @@ class UniversityListView(generics.ListCreateAPIView):
     serializer_class = UniversitySerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
+    def perform_create(self, serializer):
+        user = self.request.user
+        is_admin = user.is_authenticated and (user.is_staff or user.is_superuser or getattr(user, 'role', None) in [User.Role.GOV_ADMIN, User.Role.ADMIN, 'admin'])
+        if not is_admin:
+            raise PermissionDenied("Only administrators can create universities.")
+        serializer.save()
+
 
 class OrganizationListView(generics.ListCreateAPIView):
     queryset = Organization.objects.all().order_by('name')
     serializer_class = OrganizationSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
+    def perform_create(self, serializer):
+        user = self.request.user
+        is_admin = user.is_authenticated and (user.is_staff or user.is_superuser or getattr(user, 'role', None) in [User.Role.GOV_ADMIN, User.Role.ADMIN, 'admin'])
+        if not is_admin:
+            raise PermissionDenied("Only administrators can create organizations.")
+        serializer.save()
+
 
 class UserListView(generics.ListCreateAPIView):
     """
-    Restricted user directory (M-01).
-    - Admins and Government Administrators: Can query and create all users across the platform.
-    - University Coordinators: Can query users affiliated with their own university.
-    - External/Student/Citizen accounts: Denied access to prevent user enumeration and data scraping.
+    User directory and admin user management.
+    - Admins and Government Administrators: Full access with AdminUserSerializer, creation of any stakeholder role, and comprehensive filtering.
+    - Other Authenticated Users: Safe directory access with DirectoryUserSerializer.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -69,7 +83,7 @@ class UserListView(generics.ListCreateAPIView):
         user = self.request.user
         is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in [User.Role.GOV_ADMIN, User.Role.ADMIN, 'admin']
         if is_admin:
-            return UserProfileSerializer
+            return AdminUserSerializer
         return DirectoryUserSerializer
 
     def get_queryset(self):
@@ -77,21 +91,30 @@ class UserListView(generics.ListCreateAPIView):
         is_admin = user.is_staff or user.is_superuser or getattr(user, 'role', None) in [User.Role.GOV_ADMIN, User.Role.ADMIN, 'admin']
         is_coord = getattr(user, 'role', None) == User.Role.UNIVERSITY_COORDINATOR
 
-        if not (is_admin or is_coord):
-            raise PermissionDenied("Access to the global user directory is restricted.")
-
         qs = User.objects.select_related('university', 'organization').all().order_by('id')
-        if is_coord and not is_admin:
-            if not user.university_id:
-                raise PermissionDenied("Coordinator must be associated with an active university.")
-            qs = qs.filter(university_id=user.university_id)
+
+        if not is_admin:
+            if is_coord and user.university_id:
+                qs = qs.filter(university_id=user.university_id)
+            elif user.university_id:
+                qs = qs.filter(university_id=user.university_id)
 
         role = self.request.query_params.get('role')
-        if role:
+        if role and role != 'all':
             qs = qs.filter(role=role)
         university_id = self.request.query_params.get('university')
-        if university_id and is_admin:
+        if university_id:
             qs = qs.filter(university_id=university_id)
+        org_id = self.request.query_params.get('organization')
+        if org_id:
+            qs = qs.filter(organization_id=org_id)
+        is_active = self.request.query_params.get('is_active')
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active.lower() in ['true', '1'])
+        search = self.request.query_params.get('search')
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(Q(name__icontains=search) | Q(email__icontains=search) | Q(phone__icontains=search))
         return qs
 
     def perform_create(self, serializer):
@@ -101,11 +124,13 @@ class UserListView(generics.ListCreateAPIView):
             raise PermissionDenied("Only administrators can create users directly.")
         password = self.request.data.get('password', 'Password@123')
         instance = serializer.save()
-        instance.set_password(password)
+        instance.set_password(password or 'Password@123')
         if self.request.data.get('is_superuser'):
             instance.is_superuser = True
         if self.request.data.get('is_staff'):
             instance.is_staff = True
+        if 'is_active' in self.request.data:
+            instance.is_active = bool(self.request.data['is_active'])
         instance.save()
 
 

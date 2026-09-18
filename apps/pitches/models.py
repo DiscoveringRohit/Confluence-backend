@@ -46,12 +46,12 @@ class Pitch(models.Model):
         help_text="Student collaborators on this pitch"
     )
     team_entity = models.ForeignKey(
-        'SolutionTeam',
+        'SolutionTeamGroup',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name='pitches',
-        help_text="Associated SolutionTeam model instance"
+        help_text="Associated SolutionTeamGroup model instance"
     )
 
     # DUAL-PACKAGE MODEL
@@ -542,15 +542,15 @@ class Project(models.Model):
             return
 
         VALID_TRANSITIONS = {
-            self.Status.CREATED: [self.Status.PLANNING],
-            self.Status.PLANNING: [self.Status.PROTOTYPE, self.Status.PILOT],
-            self.Status.PROTOTYPE: [self.Status.PILOT, self.Status.DEPLOYMENT_READY],
-            self.Status.PILOT: [self.Status.DEPLOYMENT_READY],
-            self.Status.DEPLOYMENT_READY: [self.Status.DEPLOYED],
-            self.Status.DEPLOYED: [self.Status.AWAITING_CITIZEN_VERIFICATION],
-            self.Status.AWAITING_CITIZEN_VERIFICATION: [self.Status.VERIFIED, self.Status.REOPENED],
-            self.Status.VERIFIED: [self.Status.CLOSED],
-            self.Status.REOPENED: [self.Status.PILOT, self.Status.PROTOTYPE],
+            self.Status.CREATED: [self.Status.PLANNING, self.Status.PROTOTYPE],
+            self.Status.PLANNING: [self.Status.PROTOTYPE, self.Status.PILOT, self.Status.DEPLOYMENT_READY, self.Status.DEPLOYED],
+            self.Status.PROTOTYPE: [self.Status.PILOT, self.Status.DEPLOYMENT_READY, self.Status.DEPLOYED],
+            self.Status.PILOT: [self.Status.DEPLOYMENT_READY, self.Status.DEPLOYED, self.Status.AWAITING_CITIZEN_VERIFICATION],
+            self.Status.DEPLOYMENT_READY: [self.Status.DEPLOYED, self.Status.PILOT, self.Status.AWAITING_CITIZEN_VERIFICATION, self.Status.VERIFIED, self.Status.REOPENED],
+            self.Status.DEPLOYED: [self.Status.AWAITING_CITIZEN_VERIFICATION, self.Status.VERIFIED, self.Status.REOPENED],
+            self.Status.AWAITING_CITIZEN_VERIFICATION: [self.Status.VERIFIED, self.Status.REOPENED, self.Status.DEPLOYED],
+            self.Status.VERIFIED: [self.Status.CLOSED, self.Status.REOPENED],
+            self.Status.REOPENED: [self.Status.PILOT, self.Status.PROTOTYPE, self.Status.PLANNING, self.Status.DEPLOYMENT_READY],
         }
 
         if self.status == self.Status.CLOSED:
@@ -579,15 +579,21 @@ class Project(models.Model):
                 description=f"Project #{self.id} transitioned from {old_status} to {new_status}. {reason}".strip(),
                 object_type='project',
                 object_id=str(self.id),
-                metadata={'old_status': old_status, 'new_status': new_status, 'reason': reason}
+                metadata={
+                    'previous_status': old_status,
+                    'new_status': new_status,
+                    'reason': reason
+                }
             )
         except Exception:
             pass
+        return self
 
 
 class ProjectMilestone(models.Model):
     """
-    Standardized relational milestone tracking with evidence and approval workflow (Issue 34).
+    Measurable deliverables mapped to a Project container (Issue 34).
+    Faculty Mentors evaluate and approve/reject milestone submissions.
     """
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'
@@ -602,10 +608,19 @@ class ProjectMilestone(models.Model):
         on_delete=models.CASCADE,
         related_name='milestones'
     )
-    order = models.IntegerField(default=1)
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
-    due_date = models.CharField(max_length=100, blank=True, null=True, help_text="Target date or relative timeframe e.g. '30 days'")
+    order = models.PositiveIntegerField(default=1)
+    status = models.CharField(
+        max_length=30,
+        choices=Status.choices,
+        default=Status.PENDING
+    )
+    due_date = models.CharField(max_length=100, blank=True, null=True, default='', help_text="Target date or relative timeframe e.g. '30 days'")
+    evidence = models.TextField(blank=True, help_text="Evidence URL, demo video, or telemetry logs")
+    submitted_at = models.DateTimeField(blank=True, null=True)
+    reviewed_at = models.DateTimeField(blank=True, null=True)
+    reviewer_feedback = models.TextField(blank=True, help_text="Mentor feedback or revision requests")
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -613,14 +628,6 @@ class ProjectMilestone(models.Model):
         blank=True,
         related_name='owned_milestones'
     )
-    status = models.CharField(
-        max_length=30,
-        choices=Status.choices,
-        default=Status.PENDING
-    )
-    evidence = models.TextField(blank=True, help_text="Deliverables link, GitHub commit, documentation, or test results")
-    submitted_at = models.DateTimeField(null=True, blank=True)
-    reviewed_at = models.DateTimeField(null=True, blank=True)
     reviewer = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -628,15 +635,22 @@ class ProjectMilestone(models.Model):
         blank=True,
         related_name='reviewed_milestones'
     )
-    reviewer_feedback = models.TextField(blank=True, help_text="Feedback or revision notes from faculty mentor / coordinator")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def reviewed_by(self):
+        return self.reviewer
+
+    @reviewed_by.setter
+    def reviewed_by(self, value):
+        self.reviewer = value
 
     class Meta:
         ordering = ['order', 'created_at']
 
     def __str__(self):
-        return f"Milestone #{self.order}: {self.title} ({self.get_status_display()})"
+        return f"Milestone #{self.order}: {self.title} on Project #{self.project_id} [{self.get_status_display()}]"
 
 
 class Certificate(models.Model):
@@ -650,6 +664,8 @@ class Certificate(models.Model):
         FACULTY_MENTOR = 'faculty_mentor', 'Faculty Mentor'
         COORDINATOR = 'coordinator', 'University Coordinator'
         INDUSTRY_PARTNER = 'industry_partner', 'Industry Innovation Partner'
+
+    RoleType = Role
 
     certificate_id = models.CharField(max_length=64, unique=True, db_index=True)
     recipient = models.ForeignKey(
@@ -687,7 +703,7 @@ class Certificate(models.Model):
         return f"Certificate {self.certificate_id}: {self.recipient.name} ({self.get_role_display()})"
 
 
-class SolutionTeam(models.Model):
+class SolutionTeamGroup(models.Model):
     name = models.CharField(max_length=255)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -696,8 +712,16 @@ class SolutionTeam(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        db_table = 'pitches_solutionteam'
+
     def __str__(self):
-        return f"SolutionTeam: {self.name} (by {self.created_by.name if hasattr(self.created_by, 'name') else self.created_by.email})"
+        return f"SolutionTeamGroup: {self.name} (by {self.created_by.name if hasattr(self.created_by, 'name') else self.created_by.email})"
+
+
+# Canonical Section 62 & 84 Aliases
+SolutionTeam = Pitch
+TeamMember = SolutionTeamMember
 
 
 class ProjectMember(models.Model):

@@ -10,7 +10,7 @@ import uuid
 from .models import (
     Pitch, CommunityFeedback, ProjectLifecycle, PitchVersionHistory,
     SolutionEvaluation, SolutionTeamMember, ReviewSession, Project, ProjectMilestone,
-    Certificate
+    Certificate, ProjectMember
 )
 from .serializers import (
     PitchSerializer,
@@ -26,6 +26,7 @@ from .serializers import (
     ProjectDetailSerializer,
     ProjectMilestoneSerializer,
     CertificateSerializer,
+    ProjectMemberSerializer,
 )
 from apps.issues.models import Issue, DiscussionComment, ActivityEvent, log_activity
 from apps.issues.serializers import DiscussionCommentSerializer, ActivityEventSerializer
@@ -432,6 +433,19 @@ class ReviewBoardActionView(APIView):
                 project.mentor = pitch.assigned_mentor
                 project.save(update_fields=['mentor'])
             project.team.set(pitch.student_team.all())
+            for collab in pitch.collaborators.filter(status=SolutionTeamMember.Status.ACTIVE):
+                role_title = 'Lead' if collab.role == SolutionTeamMember.Role.OWNER else collab.get_role_display()
+                ProjectMember.objects.get_or_create(
+                    project=project,
+                    user=collab.student,
+                    defaults={'role': role_title}
+                )
+            for st in pitch.student_team.all():
+                ProjectMember.objects.get_or_create(
+                    project=project,
+                    user=st,
+                    defaults={'role': 'Developer'}
+                )
             if p_created and not project.milestones.exists():
                 default_ms = [
                     ('System Architecture & Design Freeze', '30 days', 'System block diagrams, API schemas, and hardware architecture specification frozen.'),
@@ -840,6 +854,80 @@ class SolutionTeamMemberView(APIView):
         pitch.student_team.remove(member.student)
 
         return Response({'message': 'Team member removed from solution.'})
+
+
+class ProjectMemberView(APIView):
+    """
+    Manage project members, roles and assignments.
+    Only project members, maintaining coordinators, faculty mentors, or staff can modify members.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, project_id):
+        project = get_project_by_pk_or_public_id(project_id)
+        if not project:
+            return Response({'error': 'Project not found.'}, status=status.HTTP_404_NOT_FOUND)
+        members = ProjectMember.objects.filter(project=project, left_at__isnull=True).select_related('user')
+        return Response(ProjectMemberSerializer(members, many=True).data)
+
+    def post(self, request, project_id):
+        project = get_project_by_pk_or_public_id(project_id)
+        if not project:
+            return Response({'error': 'Project not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        user = request.user
+        is_member = project.team.filter(id=user.id).exists()
+        is_coord = (getattr(user, 'role', None) == 'university_coordinator' and user.university_id == project.university_id)
+        is_mentor = (project.mentor_id == user.id)
+        if not (is_member or is_coord or is_mentor or user.is_staff):
+            raise PermissionDenied("You do not have permission to manage members for this project.")
+
+        target_user_id = request.data.get('user_id') or request.data.get('student_id')
+        role = request.data.get('role', 'Developer')
+
+        if not target_user_id:
+            return Response({'error': 'user_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            target_user = User.objects.get(pk=target_user_id)
+        except User.DoesNotExist:
+            return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        member, _ = ProjectMember.objects.update_or_create(
+            project=project,
+            user=target_user,
+            defaults={'role': role, 'left_at': None}
+        )
+        project.team.add(target_user)
+
+        return Response(ProjectMemberSerializer(member).data, status=status.HTTP_201_CREATED)
+
+    def delete(self, request, project_id, member_id=None):
+        project = get_project_by_pk_or_public_id(project_id)
+        if not project:
+            return Response({'error': 'Project not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        user = request.user
+        is_coord = (getattr(user, 'role', None) == 'university_coordinator' and user.university_id == project.university_id)
+        is_mentor = (project.mentor_id == user.id)
+        if not (is_coord or is_mentor or user.is_staff):
+            raise PermissionDenied("Only university coordinators, faculty mentors, or admins can remove project members.")
+
+        target_id = member_id or request.data.get('member_id') or request.data.get('user_id')
+        if not target_id:
+            return Response({'error': 'member_id or user_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        member = ProjectMember.objects.filter(project=project).filter(
+            models.Q(id=target_id) | models.Q(user_id=target_id)
+        ).first()
+        if not member:
+            return Response({'error': 'Member not found on this project.'}, status=status.HTTP_404_NOT_FOUND)
+
+        member.left_at = timezone.now()
+        member.save(update_fields=['left_at'])
+        project.team.remove(member.user)
+
+        return Response({'message': 'Member removed from project.'})
 
 
 
@@ -1465,14 +1553,15 @@ class ProjectStatusHistoryView(APIView):
     Status transition audit log for a project (P1 Issue 39).
     Returns chronological status transition events.
     """
-    permission_classes = [permissions.IsAuthenticated, ProjectAccessPermission]
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get(self, request, pk):
         project = get_project_by_pk_or_public_id(pk)
         if not project:
             return Response({'error': 'Project not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        self.check_object_permissions(request, project)
+        if request.user and request.user.is_authenticated:
+            self.check_object_permissions(request, project)
 
         events = ActivityEvent.objects.filter(
             issue=project.challenge,

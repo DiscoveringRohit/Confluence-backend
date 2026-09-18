@@ -27,6 +27,7 @@ from .views import (
     GenerateCertificateView,
     VerifyCertificateView,
     UserCertificateListView,
+    ProjectMemberView,
 )
 
 urlpatterns = [
@@ -37,6 +38,11 @@ urlpatterns = [
     # Issue 32 & 33: Projects
     path('projects/', ProjectListCreateView.as_view(), name='projects_list_create'),
     path('projects/<str:pk>/', ProjectDetailView.as_view(), name='project_detail'),
+    # Project Team
+    path('projects/<str:project_id>/team/', ProjectMemberView.as_view(), name='project_team'),
+    path('projects/<str:project_id>/team/<int:member_id>/', ProjectMemberView.as_view(), name='project_team_detail'),
+    path('projects/<str:project_id>/members/', ProjectMemberView.as_view(), name='project_members_alias'),
+    path('projects/<str:project_id>/members/<int:member_id>/', ProjectMemberView.as_view(), name='project_members_detail_alias'),
     # Issue 34: Project Milestones
     path('projects/<str:project_id>/milestones/', ProjectMilestoneListCreateView.as_view(), name='project_milestones_list_create'),
     path('projects/<str:project_id>/milestones/<int:pk>/', ProjectMilestoneDetailView.as_view(), name='project_milestone_detail'),
